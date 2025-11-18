@@ -9,7 +9,8 @@ import unicodedata
 # Paths
 # -----------------------------
 
-DATA_DIR = Path(r"C:\Users\b-yan\Downloads")
+# Always store/load data from the same folder as this script
+DATA_DIR = Path(__file__).parent
 APP_ROOT = Path(r"C:\Users\b-yan\OneDrive\Documents\Bo - Python Apps\NHL Simulator")
 
 RW_FILE = DATA_DIR / "rw-nhl-player-pool.xlsx"
