@@ -522,37 +522,30 @@ def compute_fantasy_points(df: pd.DataFrame) -> pd.DataFrame:
 
         k["TEAM_KEY"] = k[team_col].astype(str).str.strip().str.upper()
 
-        # Try raw line strength first
-        line_off_vals = pd.to_numeric(
-            k.get("line_strength_raw", np.nan),
-            errors="coerce"
-        )
+       # Try raw line strength first
+        line_off_vals = pd.to_numeric(k.get("line_strength_raw", np.nan), errors="coerce")
         
-        # Fallback to line_offense_mult if raw is missing or invalid
+        # Fallback to line_offense_mult if raw missing or invalid
         if not isinstance(line_off_vals, pd.Series) or not np.isfinite(line_off_vals).any():
-            line_off_vals = pd.to_numeric(
-                k.get("line_offense_mult", 1.0),
-                errors="coerce"
-            )
+            line_off_vals = pd.to_numeric(k.get("line_offense_mult", 1.0), errors="coerce")
         
-        # ------------------------------------------
-        # SAFE FILLNA PATCH (scalar → Series)
-        # ------------------------------------------
-        tmp = line_off_vals
+        # SAFE: Guarantee Series
+        if not isinstance(line_off_vals, pd.Series):
+            line_off_vals = pd.Series([line_off_vals] * len(d), index=d.index)
         
-        # If scalar, convert into full-length Series matching d
-        if not isinstance(tmp, pd.Series):
-            tmp = pd.Series([tmp] * len(d), index=d.index)
+        line_off_vals = line_off_vals.fillna(1.0)
         
-        line_off_vals = tmp.fillna(1.0)
-
-        line_def_vals = pd.to_numeric(
-            k.get("line_defense_mult", np.nan), errors="coerce"
-        )
-        team_def_vals = pd.to_numeric(
-            k.get("team_defense_mult", 1.0), errors="coerce"
-        ).fillna(1.0)
-
+        # Defensive values (line + team)
+        line_def_vals = pd.to_numeric(k.get("line_defense_mult", np.nan), errors="coerce")
+        if not isinstance(line_def_vals, pd.Series):
+            line_def_vals = pd.Series([line_def_vals] * len(d), index=d.index)
+        line_def_vals = line_def_vals.fillna(1.0)
+        
+        team_def_vals = pd.to_numeric(k.get("team_defense_mult", 1.0), errors="coerce")
+        if not isinstance(team_def_vals, pd.Series):
+            team_def_vals = pd.Series([team_def_vals] * len(d), index=d.index)
+        team_def_vals = team_def_vals.fillna(1.0)
+        
         k["__line_off"] = line_off_vals
         k["__line_def"] = line_def_vals
         k["__team_def"] = team_def_vals
@@ -588,7 +581,14 @@ def compute_fantasy_points(df: pd.DataFrame) -> pd.DataFrame:
         m = m.merge(opp_agg, on=["opp_team", "opp_line"], how="left")
 
         opp_line_def = pd.to_numeric(m.get("opp_line_def", np.nan), errors="coerce")
-        opp_team_def = pd.to_numeric(m.get("opp_team_def", 1.0), errors="coerce").fillna(1.0)
+        if not isinstance(opp_line_def, pd.Series):
+            opp_line_def = pd.Series([opp_line_def] * len(m), index=m.index)
+        opp_line_def = opp_line_def.fillna(1.0)
+        
+        opp_team_def = pd.to_numeric(m.get("opp_team_def", 1.0), errors="coerce")
+        if not isinstance(opp_team_def, pd.Series):
+            opp_team_def = pd.Series([opp_team_def] * len(m), index=m.index)
+        opp_team_def = opp_team_def.fillna(1.0)
         eff_def = np.where(
             np.isfinite(opp_line_def),
             opp_line_def * opp_team_def,
