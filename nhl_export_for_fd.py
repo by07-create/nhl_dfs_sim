@@ -1,15 +1,23 @@
 # nhl_export_for_fd.py
+#
+# Cloud-safe FanDuel export. Ensures:
+#   - final_fpts is exported
+#   - fpts_sigma exported
+#   - env_key + line_num exported
+#   - base_pos exported
+#   - recency + matchup + line strength fields exported
+#   - No hard-coded Windows paths
 
 import pandas as pd
 from pathlib import Path
 
 # -------------------------------------
-# Project Paths
+# Project Paths (cloud-safe)
 # -------------------------------------
-PROJECT_DIR = Path(r"C:\Users\b-yan\OneDrive\Documents\Bo - Python Apps\NHL Simulator")
+APP_ROOT = Path(__file__).parent.resolve()
 
-INPUT_FILE = PROJECT_DIR / "nhl_player_projections.csv"
-OUTPUT_FILE = PROJECT_DIR / "nhl_fd_projections.csv"
+INPUT_FILE = APP_ROOT / "nhl_player_projections.csv"
+OUTPUT_FILE = APP_ROOT / "nhl_fd_projections.csv"
 
 
 def main():
@@ -17,11 +25,11 @@ def main():
     df = pd.read_csv(INPUT_FILE)
 
     # -------------------------------------
-    # Create a clean, single projection column for FD
-    # Order of importance:
-    #   1. final_fpts (full model)
-    #   2. prop_adj_fpts (if props adjusted it)
-    #   3. Rotowire FPTS fallback
+    # PROJ column (used by FD builder)
+    # Order:
+    #   1. final_fpts
+    #   2. prop_adj_fpts
+    #   3. FPTS (raw Rotowire)
     # -------------------------------------
     if "final_fpts" in df.columns:
         df["PROJ"] = df["final_fpts"]
@@ -30,48 +38,62 @@ def main():
     else:
         df["PROJ"] = df.get("FPTS", 0)
 
-    # Make sure PROJ is numeric
-    df["PROJ"] = pd.to_numeric(df["PROJ"], errors="coerce").fillna(0)
+    df["PROJ"] = pd.to_numeric(df["PROJ"], errors="coerce").fillna(0.0)
 
     # -------------------------------------
-    # Columns we want for FanDuel upload
+    # Guarantee core identifiers
+    # -------------------------------------
+    # POS → base_pos fallback
+    if "POS" not in df.columns and "base_pos" in df.columns:
+        df["POS"] = df["base_pos"]
+
+    if "base_pos" not in df.columns and "POS" in df.columns:
+        df["base_pos"] = df["POS"].astype(str).str.upper().str[0]
+
+    # -------------------------------------
+    # FD Export Columns
     # -------------------------------------
     keep_cols = [
         "PLAYER",
         "POS",
+        "base_pos",
         "TEAM",
         "OPP",
         "SAL",
-        "PROJ",  # <<< main projection used by lineup builder
-        "is_goalie",
-        "FPTS", # raw Rotowire
-        "fpts_sigma",       
-        "final_fpts",        # model projection
-        "prop_adj_fpts",     # vegas-adjusted projection
-        "xg_per_game_model",
-        "shots_per_game_model",
-        "assists_per_game_model",
-        "blocks_per_game_model",
-        "pp_points_per_game_model",
-        "goalie_win_prob",
-    
-    "matchup_mult",
-    "line_strength_norm",
-    "line_matchup_strength",
-]
+        "PROJ",
 
-    # Keep only columns that exist
+        # Core projection components
+        "final_fpts",
+        "prop_adj_fpts",
+        "FPTS",
+        "fpts_sigma",
+
+        # Matchup multipliers
+        "matchup_mult",
+        "line_strength_mult",
+        "final_matchup_mult",
+        "line_strength_norm",
+        "line_matchup_strength",
+
+        # Keep recency signals (useful for debugging + slate sim)
+        "xG_per60_recency",
+        "SOG_per60_recency",
+        "xGA_pg_recency",
+        "xGA_pg_recency_goalie",
+    ]
+
+    # Only keep columns that actually exist
     keep_cols = [c for c in keep_cols if c in df.columns]
+
     df_out = df[keep_cols].copy()
 
     # -------------------------------------
-    #  PATCH: Preserve line information so merge_line_goal works
+    # Preserve env_key + line_num (essential for line model merge)
     # -------------------------------------
-    # env_key example: "CAR_L1"
     if "env_key" in df.columns:
         df_out["env_key"] = df["env_key"]
 
-    # line_num example: 1,2,3,4
+    # Find line number field
     if "line_num" in df.columns:
         df_out["line_num"] = df["line_num"]
     elif "LINE" in df.columns:
@@ -79,8 +101,9 @@ def main():
     else:
         df_out["line_num"] = None
 
-
-    # Sort best -> worst for convenience
+    # -------------------------------------
+    # Sort FD file best → worst
+    # -------------------------------------
     df_out = df_out.sort_values("PROJ", ascending=False)
 
     print(f" Writing FanDuel export -> {OUTPUT_FILE}")
