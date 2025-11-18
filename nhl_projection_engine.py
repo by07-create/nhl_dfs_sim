@@ -335,27 +335,28 @@ def compute_fantasy_points(df: pd.DataFrame) -> pd.DataFrame:
 
     # Fallback: per-60 * avg TOI if per-game is unavailable
     xg60  = pd.to_numeric(d.get("xG_per60", np.nan), errors="coerce")
-    sog60 = pd.to_numeric(d.get("shots_on_goal_per60", d.get("SOG_per60", np.nan)), errors="coerce")
+    sog60 = pd.to_numeric(
+        d.get("shots_on_goal_per60", d.get("SOG_per60", np.nan)),
+        errors="coerce",
+    )
     toi_tot = pd.to_numeric(d.get("icetime", np.nan), errors="coerce")  # season seconds
+
+    # avg_toi = season icetime / games played
     avg_toi = (toi_tot / gp).where((toi_tot > 0) & gp.notna(), np.nan)
 
-    # ---- SAFETY PATCH: ensure all metrics are Series ----
-    # Convert each to numeric first
+    # ----------------------------------------------------
+    # SAFETY PATCH: guarantee xg60, sog60, avg_toi are Series
+    # ----------------------------------------------------
+    if not isinstance(xg60, pd.Series):
+        xg60 = pd.Series([xg60] * len(d), index=d.index)
+    if not isinstance(sog60, pd.Series):
+        sog60 = pd.Series([sog60] * len(d), index=d.index)
+    if not isinstance(avg_toi, pd.Series):
+        avg_toi = pd.Series([avg_toi] * len(d), index=d.index)
+
     xg60 = pd.to_numeric(xg60, errors="coerce")
     sog60 = pd.to_numeric(sog60, errors="coerce")
     avg_toi = pd.to_numeric(avg_toi, errors="coerce")
-    
-    # Force float → Series if needed
-    if not isinstance(xg60, pd.Series):
-        xg60 = pd.Series([xg60] * len(df), index=df.index)
-    
-    if not isinstance(sog60, pd.Series):
-        sog60 = pd.Series([sog60] * len(df), index=df.index)
-    
-    if not isinstance(avg_toi, pd.Series):
-        avg_toi = pd.Series([avg_toi] * len(df), index=df.index)
-
-    # Now safe to use fillna
 
     mp_fpts_alt = (
         FD_GOAL * xg60.fillna(0.0) * avg_toi.fillna(0.0) / 60.0 +
@@ -823,7 +824,8 @@ def run_engine(
     output_file: Path = OUTPUT_FILE,
 ):
     print(f" Reading merged player pool -> {merged_file}")
-    df = pd.read_csv(merged_file)
+    # Use low_memory=False so pandas does a proper pass and stops whining
+    df = pd.read_csv(merged_file, low_memory=False)
 
     print(f" Attaching props (if available) -> {props_file}")
     df = attach_props(df, props_file)
@@ -834,7 +836,6 @@ def run_engine(
     print(f" Writing projections -> {output_file}")
     df.to_csv(output_file, index=False)
     print(" Done.")
-
 
 if __name__ == "__main__":
     run_engine()
