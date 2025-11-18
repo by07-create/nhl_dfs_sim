@@ -1,182 +1,192 @@
-# merge_nhl_data.py -- Cloud-Safe Version
-# RW + MoneyPuck unified merge script for your NHL DFS pipeline
-# This version works on Render, Streamlit Cloud, Linux, mobile, Windows, Mac
+# merge_nhl_data.py — Cloud-Safe RW + MoneyPuck Merge
+# Uses MoneyPuck L10 + L20 (2025 season)
+# Fully compatible with Render / Streamlit Cloud
 
 import pandas as pd
-import numpy as np
 from pathlib import Path
 import requests
 from io import StringIO
+import time
 
 # ---------------------------------------------------------
-# CLOUD-SAFE DATA DIRECTORY
+# CLOUD-SAFE PATHS
 # ---------------------------------------------------------
 DATA_DIR = Path(__file__).parent
 RW_FILE = DATA_DIR / "rw-nhl-player-pool.xlsx"
-
-# Output files (same folder, cloud-safe)
 MERGED_OUT = DATA_DIR / "merged_nhl_player_pool.csv"
+
+# Cache directory for fallback when MP is down
+CACHE_DIR = DATA_DIR / "moneypuck_cache"
+CACHE_DIR.mkdir(exist_ok=True)
 
 
 # ---------------------------------------------------------
-# Robust MoneyPuck downloader (Option A)
+# Utility — build cache path
+# ---------------------------------------------------------
+def _cache_path(label: str):
+    safe = label.replace(" ", "_").replace("/", "_")
+    return CACHE_DIR / f"{safe}.csv"
+
+
+# ---------------------------------------------------------
+# Robust MoneyPuck CSV downloader (Retry + Fallback)
 # ---------------------------------------------------------
 def _load_mp_csv(url: str, label: str) -> pd.DataFrame:
     """
-    Robust MoneyPuck CSV fetcher.
-    - Adds proper headers
-    - Avoids empty CSV issues
-    - Works on Render / Streamlit Cloud
+    Robust MoneyPuck CSV fetcher:
+    - Adds headers (MoneyPuck blocks requests without UA)
+    - 3 retries
+    - fallback to cached CSV if MoneyPuck is unavailable
     """
-    print(f"[INFO] Fetching MoneyPuck {label} from: {url}")
+
+    print(f"[INFO] Fetching MoneyPuck {label} → {url}")
 
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/118.0 Safari/537.36"
+            "Mozilla/5.0 (X11; Linux x86_64)"
         ),
         "Accept": "text/csv,*/*;q=0.9",
     }
 
-    try:
-        r = requests.get(url, headers=headers, timeout=30)
-    except Exception as e:
-        raise RuntimeError(f"[ERROR] Connection error for {label}: {e}")
+    # Try 3 times before falling back
+    for attempt in range(3):
+        try:
+            r = requests.get(url, headers=headers, timeout=20)
+            if r.status_code == 200:
+                text = r.text.strip()
 
-    if r.status_code != 200:
-        raise RuntimeError(
-            f"[ERROR] MoneyPuck HTTP {r.status_code} for {label}"
-        )
+                if len(text) < 30:
+                    print(f"[WARN] Empty MoneyPuck CSV for {label}, retrying...")
+                else:
+                    df = pd.read_csv(StringIO(text))
+                    df.to_csv(_cache_path(label), index=False)
+                    print(f"[OK] Loaded {label}: {len(df)} rows")
+                    return df
+            else:
+                print(f"[WARN] HTTP {r.status_code} for {label}, retrying...")
 
-    text = r.text.strip()
-    if len(text) < 30:
-        raise RuntimeError(
-            f"[ERROR] MoneyPuck returned an EMPTY CSV for {label}. "
-            f"Site may be blocking cloud requests."
-        )
+        except Exception as e:
+            print(f"[WARN] Attempt {attempt+1} failed for {label}: {e}")
 
-    try:
-        df = pd.read_csv(StringIO(text))
-    except Exception as e:
-        raise RuntimeError(f"[ERROR] CSV parse failure for {label}: {e}")
+        time.sleep(2)
 
-    if df.empty:
-        raise RuntimeError(
-            f"[ERROR] {label} is empty after parsing. MP unavailable."
-        )
+    # Fallback
+    cache_file = _cache_path(label)
+    if cache_file.exists():
+        print(f"[FALLBACK] Using cached MoneyPuck {label}: {cache_file}")
+        return pd.read_csv(cache_file)
 
-    print(f"[OK] Loaded MoneyPuck {label}, rows: {len(df)}")
-    return df
+    raise RuntimeError(
+        f"[ERROR] MoneyPuck failed for {label} after retries and no cache available."
+    )
 
 
 # ---------------------------------------------------------
-# Rotowire Loader
+# MoneyPuck L10 + L20 endpoints (Skaters + Goalies)
+# ---------------------------------------------------------
+
+def load_skaters_l10() -> pd.DataFrame:
+    url = "https://moneypuck.com/moneypuck/playerData/seasonSummary/2025/regular/skaters_10.csv"
+    return _load_mp_csv(url, "skaters_L10")
+
+def load_skaters_l20() -> pd.DataFrame:
+    url = "https://moneypuck.com/moneypuck/playerData/seasonSummary/2025/regular/skaters_20.csv"
+    return _load_mp_csv(url, "skaters_L20")
+
+def load_goalies_l10() -> pd.DataFrame:
+    url = "https://moneypuck.com/moneypuck/playerData/seasonSummary/2025/regular/goalies_10.csv"
+    return _load_mp_csv(url, "goalies_L10")
+
+def load_goalies_l20() -> pd.DataFrame:
+    url = "https://moneypuck.com/moneypuck/playerData/seasonSummary/2025/regular/goalies_20.csv"
+    return _load_mp_csv(url, "goalies_L20")
+
+
+# ---------------------------------------------------------
+# Load Rotowire
 # ---------------------------------------------------------
 def load_rotowire(path: Path) -> pd.DataFrame:
     if not path.exists():
-        raise FileNotFoundError(
-            f"[ERROR] Rotowire file not found: {path}"
-        )
+        raise FileNotFoundError(f"[ERROR] Rotowire file not found: {path}")
 
-    print(f"[INFO] Loading Rotowire slate: {path}")
-
+    print(f"[INFO] Loading Rotowire slate → {path}")
     df = pd.read_excel(path)
     df.columns = [str(c).strip() for c in df.columns]
 
-    print(f"[OK] RW rows: {len(df)}")
+    print(f"[OK] RW count: {len(df)}")
     return df
 
 
 # ---------------------------------------------------------
-# MoneyPuck loader wrappers
-# ---------------------------------------------------------
-def load_skaters() -> pd.DataFrame:
-    url = (
-        "https://moneypuck.com/moneypuck/playerData/seasonSummary/2024/skaters.csv"
-    )
-    return _load_mp_csv(url, "skaters seasonSummary")
-
-
-def load_goalies() -> pd.DataFrame:
-    url = (
-        "https://moneypuck.com/moneypuck/playerData/seasonSummary/2024/goalies.csv"
-    )
-    return _load_mp_csv(url, "goalies seasonSummary")
-
-
-def load_onice() -> pd.DataFrame:
-    url = (
-        "https://moneypuck.com/moneypuck/playerData/onIce/2024/onIce_all.csv"
-    )
-    return _load_mp_csv(url, "on-ice data")
-
-
-# ---------------------------------------------------------
-# Build merged RW + MP dataset
+# Build Full Merged Player Pool
 # ---------------------------------------------------------
 def build_merged_player_pool() -> pd.DataFrame:
-    print("[STEP] Load RW data")
+    print("[STEP] Loading Rotowire…")
     df_rw = load_rotowire(RW_FILE)
 
-    print("[STEP] Load MoneyPuck skaters")
-    df_skaters = load_skaters()
+    print("[STEP] Loading MoneyPuck L10…")
+    df_skaters10 = load_skaters_l10()
+    df_goalies10 = load_goalies_l10()
 
-    print("[STEP] Load MoneyPuck goalies")
-    df_goalies = load_goalies()
-
-    print("[STEP] Load MoneyPuck on-ice matchup data")
-    df_onice = load_onice()
+    print("[STEP] Loading MoneyPuck L20…")
+    df_skaters20 = load_skaters_l20()
+    df_goalies20 = load_goalies_l20()
 
     # Standardize names
-    if "name" in df_skaters.columns:
-        df_skaters["PLAYER"] = df_skaters["name"].astype(str).str.strip()
-    if "name" in df_goalies.columns:
-        df_goalies["PLAYER"] = df_goalies["name"].astype(str).str.strip()
+    for df in [df_skaters10, df_skaters20, df_goalies10, df_goalies20]:
+        if "name" in df.columns:
+            df["PLAYER"] = df["name"].astype(str).strip()
 
-    # Merge RW with MP skaters
-    print("[STEP] Merging RW with MoneyPuck skaters...")
+    # Merge L10 skaters
+    print("[STEP] Merge RW + MP Skaters L10")
     df = df_rw.merge(
-        df_skaters,
+        df_skaters10,
         how="left",
-        left_on="PLAYER",
-        right_on="PLAYER",
+        on="PLAYER",
+        suffixes=("", "_L10"),
     )
 
-    # Attach goalie data
-    print("[STEP] Merging RW with MoneyPuck goalies...")
+    # Merge L20 skaters
+    print("[STEP] Merge RW + MP Skaters L20")
     df = df.merge(
-        df_goalies,
+        df_skaters20,
         how="left",
-        left_on="PLAYER",
-        right_on="PLAYER",
-        suffixes=("", "_goalie"),
+        on="PLAYER",
+        suffixes=("", "_L20"),
     )
 
-    # Attach on-ice data
-    if "PLAYER" in df_onice.columns:
-        print("[STEP] Merging RW with MoneyPuck on-ice...")
-        df = df.merge(
-            df_onice,
-            how="left",
-            left_on="PLAYER",
-            right_on="PLAYER",
-            suffixes=("", "_onice"),
-        )
+    # Merge goalies L10
+    print("[STEP] Merge Goalie L10")
+    df = df.merge(
+        df_goalies10,
+        how="left",
+        on="PLAYER",
+        suffixes=("", "_G_L10"),
+    )
 
-    print(f"[OK] Final merged rows: {len(df)}")
+    # Merge goalies L20
+    print("[STEP] Merge Goalie L20")
+    df = df.merge(
+        df_goalies20,
+        how="left",
+        on="PLAYER",
+        suffixes=("", "_G_L20"),
+    )
+
+    print(f"[OK] Final merged player count: {len(df)}")
     return df
 
 
 # ---------------------------------------------------------
-# Main runner
+# MAIN
 # ---------------------------------------------------------
 def main():
-    print("[RUN] Starting RW + MoneyPuck merge...")
+    print("[RUN] Building merged player pool…")
 
     df = build_merged_player_pool()
 
     df.to_csv(MERGED_OUT, index=False)
-    print(f"[DONE] Saved merged player pool → {MERGED_OUT}")
+    print(f"[DONE] Saved merged file → {MERGED_OUT}")
 
 
 if __name__ == "__main__":
