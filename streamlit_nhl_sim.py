@@ -31,15 +31,20 @@ BOOM_FILE    = PROJECT_DIR / "nhl_line_boom_model.csv"   # from slate sim
 # CLEAN pipeline – only scripts that still exist
 # -------------------------------------------------
 SCRIPT_ORDER = [
-    ("Merge RW + MoneyPuck",           "merge_nhl_data.py"),
-    ("Scrape 5v5 line matchups",       "dailyfaceoff_matchups_scraper.py"),
-    ("Build 5v5 matchup summary",      "build_5v5_matchups.py"),
-    ("Build player projections",       "nhl_projection_engine.py"),
-    ("Export projections for FD",      "nhl_export_for_fd.py"),
-    ("Build FD lineups",               "nhl_fd_lineup_builder.py"),
-    ("Run slate simulator",            "nhl_slate_simulator.py"),
-]
+    ("Merge RW + MoneyPuck",                 "merge_nhl_data.py"),
+    ("Scrape 5v5 line matchups",             "dailyfaceoff_matchups_scraper.py"),
+    ("Build 5v5 matchup summary",            "build_5v5_matchups.py"),
+    ("Build player projections",             "nhl_projection_engine.py"),
+    ("Export projections for FD",            "nhl_export_for_fd.py"),
 
+    # Required for line_goal_model.csv — YOU WERE MISSING THESE:
+    ("Build line goal model",                "nhl_line_model.py"),
+    ("Merge line goal model",                "merge_line_goal_into_projections.py"),
+
+    # Optional (only needed for boom charts)
+    ("Build stack boom model",               "line_boom_model.py"),
+    ("Build stack boom chart",               "line_boom_chart.py),
+]
 
 def run_script(label: str, script_name: str) -> bool:
     """Run one pipeline script and display logs."""
@@ -262,3 +267,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
