@@ -339,6 +339,20 @@ def compute_fantasy_points(df: pd.DataFrame) -> pd.DataFrame:
     toi_tot = pd.to_numeric(d.get("icetime", np.nan), errors="coerce")  # season seconds
     avg_toi = (toi_tot / gp).where((toi_tot > 0) & gp.notna(), np.nan)
 
+    # ---- SAFETY PATCH: xg60 and avg_toi must both be Series ----
+    # xg60 recency fallback earlier may produce a float if missing
+    xg60 = pd.to_numeric(xg60, errors="coerce")
+    if not isinstance(xg60, pd.Series):
+        # Convert single float to repeated Series
+        xg60 = pd.Series([xg60] * len(df), index=df.index)
+    
+    # avg_toi may break if icetime/games_played gets cast to scalar
+    avg_toi = pd.to_numeric(avg_toi, errors="coerce")
+    if not isinstance(avg_toi, pd.Series):
+        avg_toi = pd.Series([avg_toi] * len(df), index=df.index)
+    
+    # Now safe to use fillna
+
     mp_fpts_alt = (
         FD_GOAL * xg60.fillna(0.0) * avg_toi.fillna(0.0) / 60.0 +
         FD_SOG  * sog60.fillna(0.0) * avg_toi.fillna(0.0) / 60.0
