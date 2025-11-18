@@ -304,6 +304,14 @@ def compute_fantasy_points(df: pd.DataFrame) -> pd.DataFrame:
       - final_fpts             - blended projection (props + Rotowire + goalie model)
     """
     d = df.copy()
+    # ---------------------------
+    # Guarantee base_pos exists
+    # ---------------------------
+    if "base_pos" not in d.columns:
+        if "POS" in d.columns:
+            d["base_pos"] = d["POS"].astype(str).str.strip().str.upper().str[0]
+        else:
+            d["base_pos"] = "W"   # safe default for skaters
 
     # Rotowire FPTS as our baseline "model"
     if "FPTS" in d.columns:
