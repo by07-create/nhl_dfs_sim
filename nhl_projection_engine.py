@@ -522,11 +522,29 @@ def compute_fantasy_points(df: pd.DataFrame) -> pd.DataFrame:
 
         k["TEAM_KEY"] = k[team_col].astype(str).str.strip().str.upper()
 
-        line_off_vals = pd.to_numeric(k.get("line_strength_raw", np.nan), errors="coerce")
-        if not np.isfinite(line_off_vals).any():
+        # Try raw line strength first
+        line_off_vals = pd.to_numeric(
+            k.get("line_strength_raw", np.nan),
+            errors="coerce"
+        )
+        
+        # Fallback to line_offense_mult if raw is missing or invalid
+        if not isinstance(line_off_vals, pd.Series) or not np.isfinite(line_off_vals).any():
             line_off_vals = pd.to_numeric(
-                k.get("line_offense_mult", 1.0), errors="coerce"
-            ).fillna(1.0)
+                k.get("line_offense_mult", 1.0),
+                errors="coerce"
+            )
+        
+        # ------------------------------------------
+        # SAFE FILLNA PATCH (scalar → Series)
+        # ------------------------------------------
+        tmp = line_off_vals
+        
+        # If scalar, convert into full-length Series matching d
+        if not isinstance(tmp, pd.Series):
+            tmp = pd.Series([tmp] * len(d), index=d.index)
+        
+        line_off_vals = tmp.fillna(1.0)
 
         line_def_vals = pd.to_numeric(
             k.get("line_defense_mult", np.nan), errors="coerce"
