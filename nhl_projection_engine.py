@@ -26,7 +26,12 @@ import numpy as np
 from pathlib import Path
 from typing import Optional
 
-APP_ROOT = Path.home() / "OneDrive" / "Documents" / "Bo - Python Apps" / "NHL Simulator"
+APP_ROOT = Path(__file__).parent.resolve()
+
+MERGED_FILE = APP_ROOT / "merged_nhl_player_pool.csv"
+PROPS_FILE  = APP_ROOT / "nhl-player-props-overview-book.xlsx"
+OUTPUT_FILE = APP_ROOT / "nhl_player_projections.csv"
+
 
 MERGED_FILE = APP_ROOT / "merged_nhl_player_pool.csv"
 PROPS_FILE = APP_ROOT / "nhl-player-props-overview-book.xlsx"  # optional
