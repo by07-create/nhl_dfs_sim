@@ -11,7 +11,8 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-APP_ROOT = Path.home() / "OneDrive" / "Documents" / "Bo - Python Apps" / "NHL Simulator"
+# CLOUD-SAFE ROOT
+APP_ROOT = Path(__file__).parent.resolve()
 PROJ_FILE = APP_ROOT / "nhl_fd_projections.csv"
 LINE_FILE = APP_ROOT / "line_goal_model.csv"
 OUT_FILE = PROJ_FILE  # overwrite in place
@@ -33,10 +34,6 @@ def build_team_line_keys_for_fd(df: pd.DataFrame) -> pd.DataFrame:
 
     if line_col is not None:
         line_numeric = pd.to_numeric(df[line_col], errors="coerce")
-        # Build keys like L1, L2, L3, L4 for skaters only
-        # SAFE HANDLING OF LINE_NUMERIC
-        # ---------------------------
-        line_numeric_clean = line_numeric.dropna()
 
         df["LINE_KEY"] = None
         df.loc[line_numeric.notna(), "LINE_KEY"] = (
@@ -52,7 +49,7 @@ def build_team_line_keys_for_fd(df: pd.DataFrame) -> pd.DataFrame:
         df["LINE_KEY"] = pd.NA
 
     # -------------------------------------
-    #  PATCH: If LINE_KEY still missing, derive from env_key another way
+    # If LINE_KEY still missing, derive from env_key another way
     # -------------------------------------
     if df["LINE_KEY"].isna().all() and "env_key" in df.columns:
         tmp2 = df["env_key"].astype(str).str.extract(r"_L(\d+)", expand=False)
