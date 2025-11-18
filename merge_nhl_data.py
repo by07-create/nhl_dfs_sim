@@ -133,9 +133,9 @@ def build_merged_player_pool() -> pd.DataFrame:
     df_goalies20 = load_goalies_l20()
 
     # Standardize names
-    for df in [df_skaters10, df_skaters20, df_goalies10, df_goalies20]:
-        if "name" in df.columns:
-            df["PLAYER"] = df["name"].astype(str).strip()
+    for mp in [df_skaters10, df_skaters20, df_goalies10, df_goalies20]:
+        if "name" in mp.columns:
+            mp["PLAYER"] = mp["name"].astype(str).str.strip()
 
     # Merge L10 skaters
     print("[STEP] Merge RW + MP Skaters L10")
