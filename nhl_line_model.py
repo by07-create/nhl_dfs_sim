@@ -19,7 +19,8 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-APP_ROOT = Path.home() / "OneDrive" / "Documents" / "Bo - Python Apps" / "NHL Simulator"
+# CLOUD-SAFE ROOT (same dir as this script)
+APP_ROOT = Path(__file__).parent.resolve()
 
 INPUT_FILE = APP_ROOT / "nhl_player_projections.csv"
 OUTPUT_FILE = APP_ROOT / "line_goal_model.csv"
@@ -123,14 +124,15 @@ def compute_line_model(df: pd.DataFrame) -> pd.DataFrame:
     gp = pd.to_numeric(sk.get("games_played", 0.0), errors="coerce")
 
     with np.errstate(divide="ignore", invalid="ignore"):
+        toi_factor = (sk["_toi_pg"] / 60.0).replace(0, np.nan)
         pri_ast60 = np.where(
             (gp > 0),
-            pri_ast / gp / (sk["_toi_pg"] / 60.0).replace(0, np.nan),
+            pri_ast / gp / toi_factor,
             np.nan,
         )
         sec_ast60 = np.where(
             (gp > 0),
-            sec_ast / gp / (sk["_toi_pg"] / 60.0).replace(0, np.nan),
+            sec_ast / gp / toi_factor,
             np.nan,
         )
 
@@ -175,7 +177,10 @@ def compute_line_model(df: pd.DataFrame) -> pd.DataFrame:
         opp_rows = df[df["TEAM"] == opp]
 
         if not opp_rows.empty:
-            xga_rec = pd.to_numeric(opp_rows.get("xGA_pg_recency", np.nan), errors="coerce")
+            xga_rec = pd.to_numeric(
+                opp_rows.get("xGA_pg_recency", np.nan),
+                errors="coerce",
+            )
             xga_season = pd.to_numeric(
                 opp_rows.get("xGoalsAgainst_teamenv", np.nan),
                 errors="coerce",
@@ -212,7 +217,7 @@ def compute_line_model(df: pd.DataFrame) -> pd.DataFrame:
             env_mult *= AWAY_MULT
 
         # -----------------------
-        # 4) FINAL  AND GOAL PROB
+        # 4) FINAL λ AND GOAL PROB
         # -----------------------
         lambda_total = lambda_off * def_suppress * env_mult
         lambda_total = max(lambda_total, 0.0)
@@ -262,6 +267,7 @@ def main():
     df_lines.to_csv(OUTPUT_FILE, index=False)
 
     print(" Done.")
+
 
 if __name__ == "__main__":
     main()
