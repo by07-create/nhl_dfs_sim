@@ -49,7 +49,9 @@ import random
 # ---------------------------------------------------------------------
 # Project paths
 # ---------------------------------------------------------------------
-PROJECT_DIR = Path(r"C:\Users\b-yan\OneDrive\Documents\Bo - Python Apps\NHL Simulator")
+APP_ROOT = Path(__file__).parent.resolve()
+PROJECT_DIR = APP_ROOT
+
 
 INPUT_PROJ_FILE = PROJECT_DIR / "nhl_fd_projections.csv"
 OUTPUT_LINEUPS_FILE = PROJECT_DIR / "nhl_fd_lineups.csv"
@@ -135,82 +137,104 @@ def _compute_stack_ev(skaters: pd.DataFrame) -> float:
 # Load + normalize projections
 # ---------------------------------------------------------------------
 def load_fd_projections(path: Path) -> pd.DataFrame:
-    """Load FD projections and normalize POS, SAL, PROJ.
-    Keeps extra columns (LINE, PP LINE, team_env, etc.) for matchup/corr logic.
+    """Load FD projections and normalize POS, SAL, PROJ, LINE, and PP_LINE.
+    Ensures new recency-aware projections remain compatible with the builder.
     """
     if not path.exists():
         raise FileNotFoundError(f"Missing nhl_fd_projections.csv: {path}")
 
     df = pd.read_csv(path)
 
-    # Basic checks
+    # ----------------------------
+    # Basic required columns
+    # ----------------------------
     for c in ["PLAYER", "TEAM", "OPP"]:
         if c not in df.columns:
-            raise ValueError(f"Expected column '{c}' in {path}.")
+            raise ValueError(f"Expected column '{c}' in projections file.")
 
-    # POS detection
-    if "POS" in df.columns:
-        pos_col = "POS"
-    elif "base_pos" in df.columns:
-        pos_col = "base_pos"
-    else:
-        raise ValueError("Expected POS or base_pos column in projections file.")
-
+    # ----------------------------
     # POS normalization
+    # ----------------------------
+    pos_source = "POS" if "POS" in df.columns else "base_pos"
+    df[pos_source] = df[pos_source].astype(str)
+
     def normalize_pos(x: str) -> Optional[str]:
-        x = str(x).upper().strip()
-
-        if "/UTIL" in x:
-            x = x.replace("/UTIL", "")
-
-        if x in ["LW", "RW", "W", "WING", "WINGS"]:
+        x = x.upper().strip()
+        if x in ["LW", "RW", "W", "WING"]:
             return "W"
         if x in ["C", "CENTER", "CENTRE"]:
             return "C"
-        if x in ["D", "DEF", "DEFENSE", "DEFENCE", "DEFENCEMAN"]:
+        if x in ["D", "DEF", "DEFENCE"]:
             return "D"
-        if x in ["G", "GOALIE", "GK"]:
+        if x in ["G", "GOALIE"]:
             return "G"
         return None
 
-    df["POS"] = df[pos_col].apply(normalize_pos)
+    df["POS"] = df[pos_source].apply(normalize_pos)
     df = df[df["POS"].notna()]
 
+    # ----------------------------
     # Salary
-    if "SAL" in df.columns:
-        sal_col = "SAL"
-    elif "Salary" in df.columns:
-        sal_col = "Salary"
-    else:
-        raise ValueError("Expected SAL or Salary column in projections file.")
+    # ----------------------------
+    sal_col = "SAL" if "SAL" in df.columns else "Salary"
     df["SAL"] = pd.to_numeric(df[sal_col], errors="coerce").fillna(0).astype(int)
 
-    # Projection
+    # ----------------------------
+    # PROJ field
+    # ----------------------------
     if "PROJ" in df.columns:
         df["PROJ"] = pd.to_numeric(df["PROJ"], errors="coerce").fillna(0.0)
     else:
-        proj_col = None
+        fallback = None
         for c in ["final_fpts", "prop_adj_fpts", "FPTS", "base_fpts_model"]:
             if c in df.columns:
-                proj_col = c
+                fallback = c
                 break
-        if proj_col is None:
-            raise ValueError(
-                "No PROJ, final_fpts, prop_adj_fpts, FPTS, or base_fpts_model column found."
-            )
-        df["PROJ"] = pd.to_numeric(df[proj_col], errors="coerce").fillna(0.0)
+        if fallback is None:
+            raise ValueError("Could not find PROJ or fallback projection field.")
+        df["PROJ"] = pd.to_numeric(df[fallback], errors="coerce").fillna(0.0)
 
+    # ----------------------------
+    # BUILD LINE COLUMN
+    # (this is critical — builder logic expects LINE)
+    # ----------------------------
+    if "LINE" in df.columns:
+        pass
+    elif "line_num" in df.columns:
+        df["LINE"] = df["line_num"].apply(lambda x: f"L{int(x)}" if pd.notna(x) else None)
+    elif "env_key" in df.columns:
+        # env_key like: "COL_L1"
+        df["LINE"] = (
+            df["env_key"]
+            .astype(str)
+            .str.extract(r"_L(\d+)", expand=False)
+            .apply(lambda x: f"L{x}" if pd.notna(x) else None)
+        )
+    else:
+        df["LINE"] = None
+
+    # ----------------------------
+    # BUILD PP_LINE COLUMN
+    # ----------------------------
+    if "PP_LINE" in df.columns:
+        pass
+    elif "pp_unit" in df.columns:
+        df["PP_LINE"] = df["pp_unit"].astype(str).str.replace("PP", "")
+    elif "PP LINE" in df.columns:
+        df["PP_LINE"] = df["PP LINE"]
+    else:
+        df["PP_LINE"] = None
+
+    # ----------------------------
+    # Clean data
+    # ----------------------------
     df = df[df["PROJ"] > 0]
-    if df.empty:
-        raise ValueError("No valid players in projections after POS/PROJ filtering.")
 
-    # Keep all columns but ensure core exist
-    base_cols = ["PLAYER", "TEAM", "OPP", "POS", "SAL", "PROJ"]
-    extra_cols = [c for c in df.columns if c not in base_cols]
-    df = df[base_cols + extra_cols].reset_index(drop=True)
+    base_cols = ["PLAYER", "TEAM", "OPP", "POS", "SAL", "PROJ", "LINE", "PP_LINE"]
+    extra = [c for c in df.columns if c not in base_cols]
+    df = df[base_cols + extra].reset_index(drop=True)
 
     return df
-
 
 # ---------------------------------------------------------------------
 # Stack / goalie rules
