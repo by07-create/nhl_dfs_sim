@@ -17,6 +17,37 @@ df = pd.read_csv(INPUT_FILE)
 print(f"   Loaded {len(df)} line rows.")
 
 # ----------------------------------------------------------
+# SAFETY: Ensure all required columns exist
+# ----------------------------------------------------------
+required_cols = [
+    "TEAM","env_key",
+    "line_score","line_boom_pct","line_sim_mean","line_sim_p90",
+    "line_salary_total","line_salary_mean","line_value_score",
+    "goalie_mult","line_proj_total","line_xg_pg",
+    "fwd_score","fwd_boom_pct","fwd_xg_pg",
+    "matchup_softness"
+]
+
+for col in required_cols:
+    if col not in df.columns:
+        df[col] = 0
+
+# Cleanup TEAM
+df["TEAM"] = df["TEAM"].astype(str).fillna("")
+
+# Salary bubble scaling protection
+sal = pd.to_numeric(df["line_salary_total"], errors="coerce").fillna(0)
+rng = sal.max() - sal.min()
+if rng > 0:
+    size_scaled = 8 + (sal - sal.min()) / rng * 20
+else:
+    size_scaled = pd.Series(12, index=df.index)
+
+# Avoid flat colorbar crash
+if df["line_boom_pct"].max() == df["line_boom_pct"].min():
+    df["line_boom_pct"] += 0.01
+
+# ----------------------------------------------------------
 # Ensure numeric types (safety)
 # ----------------------------------------------------------
 numeric_cols = [
@@ -43,17 +74,6 @@ color_map = {
 
 def team_color(series):
     return series.astype(str).map(color_map)
-
-# Marker size based on salary (for chart 1)
-if "line_salary_total" in df.columns:
-    sal = df["line_salary_total"].fillna(0)
-    if sal.max() > sal.min():
-        size_scaled = 8 + (sal - sal.min()) / (sal.max() - sal.min()) * 20
-    else:
-        size_scaled = pd.Series(12, index=df.index)
-else:
-    size_scaled = pd.Series(12, index=df.index)
-
 # ----------------------------------------------------------
 # Create subplots: 5 rows x 1 column
 # ----------------------------------------------------------
