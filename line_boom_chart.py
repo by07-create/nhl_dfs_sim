@@ -130,14 +130,27 @@ fig.add_annotation(
 )
 
 # ----------------------------------------------------------
-# Row 2 — DEFENSIVE PAIRINGS ONLY (P1, P2, P3...)
+# Row 2 — DEFENSIVE PAIRINGS ONLY (P1, P2, P3...) with fallback
 # ----------------------------------------------------------
-# Filter defensive pairings
+
+# 1) Primary filter: line_role starts with "P"
 df_def = df[df["line_role"].astype(str).str.startswith("P")].copy()
 
+# 2) Fallback: check env_key for "_P"
 if df_def.empty:
-    print("⚠ Warning: No defensive pairings found for Row 2 chart.")
+    print("⚠ No P-lines detected via line_role. Scanning env_key instead.")
+    df_def = df[df["env_key"].astype(str).str.contains("_P", na=False)].copy()
 
+# 3) Final fallback: use entire dataset to avoid blank chart
+if df_def.empty:
+    print("⚠ WARNING: No defense rows found at all. Using entire DF as fallback.")
+    df_def = df.copy()
+
+# Safety fills
+df_def["best_def_score"] = df_def["best_def_score"].fillna(0)
+df_def["line_salary_total"] = df_def["line_salary_total"].fillna(0)
+
+# Scatter now uses df_def instead of df
 fig.add_trace(
     go.Scatter(
         x=df_def["line_salary_total"],
@@ -159,24 +172,6 @@ fig.add_trace(
     ),
     row=2,
     col=1,
-)
-
-fig.update_xaxes(title_text="Total Line Salary (line_salary_total)", row=2, col=1)
-fig.update_yaxes(title_text="Best Defense Stack Score (best_def_score)", row=2, col=1)
-
-fig.add_annotation(
-    row=2,
-    col=1,
-    x=0,
-    y=1.15,
-    xref="x domain",
-    yref="y domain",
-    text=(
-        "Best value → upper-left (cheap but strong defensive stacks). "
-        "Upper-right = pay-up D stacks; lower-right = expensive and weaker, usually avoid."
-    ),
-    showarrow=False,
-    font=dict(size=11),
 )
 
 # ----------------------------------------------------------
