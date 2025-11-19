@@ -132,6 +132,25 @@ NAME_FIX = {
     "joel daccord": "joey daccord",
 }
 
+# ---------------------------------------------------------
+# Normalize NAME_FIX Keys + Values (critical fix)
+# ---------------------------------------------------------
+def _normalize_for_map(s: str) -> str:
+    if not isinstance(s, str):
+        return ""
+    s = s.lower().strip()
+    for ch in [".", ",", "'", "\"", "-", "’"]:
+        s = s.replace(ch, "")
+    # collapse spaces
+    return " ".join(s.split())
+
+# Create normalized name map
+NAME_FIX = {
+    _normalize_for_map(k): _normalize_for_map(v)
+    for k, v in NAME_FIX.items()
+}
+
+
 def clean_name(s: str) -> str:
     if pd.isna(s):
         return ""
