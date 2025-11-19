@@ -114,15 +114,15 @@ BOOM_HTML_REPORT     = APP_ROOT / "nhl_line_boom_charts.html"  # from line_boom_
 # PIPELINE ORDER (with line model, no lineup builder/sim)
 # ----------------------------------------------------------
 SCRIPT_ORDER = [
-    ("Merge RW + MoneyPuck",          "merge_nhl_data.py"),
-    ("Scrape 5v5 Matchups",           "dailyfaceoff_matchups_scraper.py"),
-    ("Build 5v5 Matchup Summary",     "build_5v5_matchups.py"),
-    ("Build Player Projections",      "nhl_projection_engine.py"),
-    ("Build Line Goal Model",         "nhl_line_model.py"),
-    ("Export Projections for FD",     "nhl_export_for_fd.py"),
-    ("Build Line Boom Model",         "line_boom_model.py"),
-    ("Merge Line Goal Model",         "merge_line_goal_into_projections.py"),
-    # Charts are separate: line_boom_chart.py reads nhl_line_boom_model.csv
+    ("Merge RW + MoneyPuck",              "merge_nhl_data.py"),
+    ("Scrape 5v5 Matchups",               "dailyfaceoff_matchups_scraper.py"),
+    ("Build 5v5 Matchup Summary",         "build_5v5_matchups.py"),
+    ("Build Player Projections",          "nhl_projection_engine.py"),
+    ("Build Line Goal Model",             "nhl_line_model.py"),
+    ("Export Projections for FD",         "nhl_export_for_fd.py"),
+    ("Merge Line Goal Model",             "merge_line_goal_into_projections.py"),
+    ("Build Line Boom Model",             "line_boom_model.py"),
+    ("Build Boom Charts (HTML)",          "line_boom_chart.py"),
 ]
 
 
