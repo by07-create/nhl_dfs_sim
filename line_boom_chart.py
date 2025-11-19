@@ -1,267 +1,170 @@
-# line_boom_chart.py — 3-Panel Stack Dashboard (Cloud-Safe)
+"""
+Enhanced DFS Line + Stack Dashboard (Cloud Version)
+---------------------------------------------------
+Generates a single-page HTML visualization containing:
+    • Best forward lines
+    • Best defense stacks
+    • Best combined F+D stacks
+    • Matchup Softness Chart
+Includes a full legend/key at the top of the page.
+"""
 
 import pandas as pd
+import plotly.express as px
 from pathlib import Path
 
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import plotly.express as px
-
-# ----------------------------------------------------------
-# Cloud-safe paths
-# ----------------------------------------------------------
+# ------------------------------------------
+# CLOUD-SAFE PATHS
+# ------------------------------------------
 PROJECT_DIR = Path(__file__).parent.resolve()
 INPUT_FILE = PROJECT_DIR / "nhl_line_boom_model.csv"
-OUTPUT_HTML = PROJECT_DIR / "nhl_line_boom_charts.html"
+OUTPUT_FILE = PROJECT_DIR / "nhl_line_boom_dashboard.html"
 
-print(f" Loading line model -> {INPUT_FILE}")
+print("Chart script started")
+print(f"Loading CSV: {INPUT_FILE}")
+
+# -----------------------
+# Load & Normalize Data
+# -----------------------
 df = pd.read_csv(INPUT_FILE)
-print(f"   Loaded {len(df)} line rows.")
+print(f"Loaded {len(df)} rows")
 
-# ----------------------------------------------------------
-# Ensure numeric types
-# ----------------------------------------------------------
-numeric_cols = [
-    "fwd_score",
-    "line_score",
-    "line_salary_total",
-    "best_def_score",
+# Rebuild line_role safely from env_key
+df["line_role"] = (
+    df["env_key"]
+    .astype(str)
+    .str.upper()
+    .str.extract(r"_(P\d+|L\d+)", expand=False)
+    .fillna("")
+)
+
+# Expected fields
+needed = [
+    "TEAM","env_key","line_role","line_score","fwd_score","fld_score",
+    "best_def_for_line","best_def_score","best_stack_score",
+    "line_salary_total","matchup_mult_mean","goalie_mult","line_hdcf",
+    "fld_line_hdcf","fwd_line_hdcf","matchup_softness"
 ]
+for col in needed:
+    if col not in df.columns:
+        df[col] = None
 
-for col in numeric_cols:
-    if col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    else:
-        print(f" ⚠ Warning: column '{col}' not found in line model.")
+# Default values
+df["best_def_score"] = df["best_def_score"].fillna(0)
+df["best_stack_score"] = df["best_stack_score"].fillna(0)
+df["line_salary_total"] = df["line_salary_total"].fillna(0)
+df["matchup_softness"] = df["matchup_softness"].fillna(0)
 
-df = df.dropna(
-    subset=["fwd_score", "line_score", "line_salary_total", "best_def_score"],
-    how="all"
-)
-print(f"   After cleaning, {len(df)} rows remain.")
+print("Forward rows (L*):", len(df[df["line_role"].str.startswith("L", na=False)]))
+print("Defense rows (P*):", len(df[df["line_role"].str.startswith("P", na=False)]))
 
-# ----------------------------------------------------------
-# Simple team color mapping
-# ----------------------------------------------------------
-if "TEAM" not in df.columns:
-    raise ValueError("Expected 'TEAM' column in nhl_line_boom_model.csv for coloring.")
+# -----------------------
+# Legend / Key
+# -----------------------
+legend_text = """
+<h2>Legend / Key</h2>
+<ul>
+<li><b>line_score</b> – Full-line DFS score (simulation + xG + danger + matchup).</li>
+<li><b>fwd_score</b> – Forward-only ceiling score (best for 2–3 man stacks).</li>
+<li><b>fld_score</b> – Full line score (forwards + defense).</li>
+<li><b>best_def_for_line</b> – The defense unit that stacks best with this forward line.</li>
+<li><b>best_def_score</b> – Strength rating of that D stack.</li>
+<li><b>best_stack_score</b> – fwd_score + best_def_score.</li>
+<li><b>goalie_mult</b> – Opposing goalie weakness multiplier (>1 means favorable).</li>
+<li><b>matchup_mult_mean</b> – How soft/hard matchup is (>1 means easier).</li>
+<li><b>line_hdcf</b> – Recency high-danger chance rate.</li>
+<li><b>line_salary_total</b> – Combined FanDuel salary for this line.</li>
+<li><b>matchup_softness</b> – Negative = soft matchup, Positive = tough matchup.</li>
+</ul>
+<hr>
+"""
 
-teams = sorted(df["TEAM"].astype(str).unique())
-palette = px.colors.qualitative.Plotly
-color_map = {team: palette[i % len(palette)] for i, team in enumerate(teams)}
+# -----------------------
+# Chart 1 – Best Forward Lines
+# -----------------------
+df_fwd = df[df["line_role"].str.startswith("L", na=False)].copy()
 
-def team_color(series):
-    return series.astype(str).map(color_map)
-
-# Marker size (scaled by salary)
-if "line_salary_total" in df.columns:
-    sal = df["line_salary_total"].fillna(0)
-    if sal.max() > sal.min():
-        size_scaled = 8 + (sal - sal.min()) / (sal.max() - sal.min()) * 20
-    else:
-        size_scaled = pd.Series(12, index=df.index)
-else:
-    size_scaled = pd.Series(12, index=df.index)
-
-env_text = (
-    df["TEAM"].astype(str) + " " + df["env_key"].astype(str)
-    if "env_key" in df.columns
-    else df["TEAM"].astype(str)
-)
-
-# ----------------------------------------------------------
-# Create subplots: 3 stacked rows
-# ----------------------------------------------------------
-fig = make_subplots(
-    rows=3,
-    cols=1,
-    shared_xaxes=False,
-    vertical_spacing=0.1,
-    subplot_titles=(
-        "1. Forward Stack Score vs Overall Line Score",
-        "2. Salary vs Best Defense Stack Score (Defense-Only)",
-        "3. Best Defense Score vs Forward Stack Score",
-    ),
+fig1 = px.scatter(
+    df_fwd,
+    x="line_score",
+    y="fwd_score",
+    size="best_stack_score",
+    color="TEAM",
+    hover_name="env_key",
+    title="Best Forward Lines (FWD Score vs Line Score)",
 )
 
-# ----------------------------------------------------------
-# Row 1 — fwd_score vs line_score
-# ----------------------------------------------------------
-fig.add_trace(
-    go.Scatter(
-        x=df["line_score"],
-        y=df["fwd_score"],
-        mode="markers",
-        marker=dict(
-            size=size_scaled,
-            color=team_color(df["TEAM"]),
-            sizemode="diameter",
-            opacity=0.8,
-            line=dict(width=0.5, color="black"),
-        ),
-        text=env_text,
-        hovertemplate=(
-            "TEAM/Line: %{text}<br>"
-            "Fwd Score: %{y:.2f}<br>"
-            "Line Score: %{x:.2f}<br>"
-            "Salary Total: %{customdata[0]:.0f}<extra></extra>"
-        ),
-        customdata=df[["line_salary_total"]].values,
-        name="Fwd vs Line Score",
-    ),
-    row=1,
-    col=1,
-)
+# -----------------------
+# Chart 2 – Best Defense Stacks
+# -----------------------
+df_def = df[df["line_role"].str.startswith("P", na=False)].copy()
 
-fig.update_xaxes(title_text="Overall Line Score (line_score)", row=1, col=1)
-fig.update_yaxes(title_text="Forward Stack Score (fwd_score)", row=1, col=1)
-
-fig.add_annotation(
-    row=1,
-    col=1,
-    x=0,
-    y=1.15,
-    xref="x domain",
-    yref="y domain",
-    text=(
-        "Best stacks → upper-right (high fwd_score & high line_score). "
-        "Upper-left = strong line but weaker forwards; lower-right = strong forwards but weaker overall line."
-    ),
-    showarrow=False,
-    font=dict(size=11),
-)
-
-# ----------------------------------------------------------
-# Row 2 — DEFENSIVE PAIRINGS ONLY (P1, P2, P3...) + None fix
-# ----------------------------------------------------------
-
-# 1) Primary: line_role starts with P
-df_def = df[df["line_role"].astype(str).str.startswith("P", na=False)].copy()
-
-# 2) Try env_key fallback
 if df_def.empty:
-    print("⚠ No P-lines detected via line_role. Scanning env_key instead.")
+    print("No P-lines detected via line_role. Scanning env_key instead.")
     df_def = df[df["env_key"].astype(str).str.contains("_P", na=False)].copy()
 
-# 3) Final fallback: use full DF (prevents blank chart)
 if df_def.empty:
-    print("⚠ WARNING: No defense rows found at all. Using entire DF as fallback.")
+    print("WARNING: No defense rows found. Using entire DF as fallback.")
     df_def = df.copy()
 
-# --- 🔥 Critical patch: convert "None" → NaN → 0 ---
-df_def["best_def_score"] = (
-    df_def["best_def_score"]
-    .replace("None", None)
-    .astype(float)
-    .fillna(0)
+df_def["best_def_score"] = df_def["best_def_score"].fillna(0)
+df_def["line_salary_total"] = df_def["line_salary_total"].fillna(0)
+
+fig2 = px.scatter(
+    df_def,
+    x="line_salary_total",
+    y="best_def_score",
+    color="TEAM",
+    hover_name="env_key",
+    title="Best Defense Stacks (Salary vs D-Stack Score)",
 )
 
-df_def["line_salary_total"] = (
-    df_def["line_salary_total"]
-    .replace("None", None)
-    .astype(float)
-    .fillna(0)
+# -----------------------
+# Chart 3 – Combined F + D Stack Scores
+# -----------------------
+fig3 = px.scatter(
+    df_fwd,
+    x="fwd_score",
+    y="best_def_score",
+    size="best_stack_score",
+    color="TEAM",
+    hover_name="env_key",
+    title="Top Combined F+D Stacks (FWD Score vs DEF Score)",
 )
 
-fig.add_trace(
-    go.Scatter(
-        x=df_def["line_salary_total"],
-        y=df_def["best_def_score"],
-        mode="markers",
-        marker=dict(
-            size=10,
-            color=team_color(df_def["TEAM"]),
-            opacity=0.85,
-            line=dict(width=0.5, color="black"),
-        ),
-        text=df_def["TEAM"].astype(str) + " " + df_def["env_key"].astype(str),
-        hovertemplate=(
-            "TEAM/Pair: %{text}<br>"
-            "Total Salary: %{x:.0f}<br>"
-            "Best Def Score: %{y:.2f}<extra></extra>"
-        ),
-        name="Salary vs Best D Score",
-    ),
-    row=2,
-    col=1,
+# ===========================================================
+# Chart 4 – Matchup Softness vs Line Score
+# ===========================================================
+fig4 = px.scatter(
+    df_fwd,
+    x="matchup_softness",
+    y="line_score",
+    size="best_stack_score",
+    color="TEAM",
+    hover_name="env_key",
+    title="Matchup Softness vs Line Score (Soft < 0 | Hard > 0)",
+)
+fig4.update_layout(
+    xaxis_title="Matchup Softness (negative = soft matchup)",
+    yaxis_title="Line Score"
 )
 
-fig.update_xaxes(title_text="Total Line Salary (line_salary_total)", row=2, col=1)
-fig.update_yaxes(title_text="Best Defense Stack Score (best_def_score)", row=2, col=1)
+# -----------------------
+# Build One-Page HTML Output
+# -----------------------
+print(f"Saving dashboard to: {OUTPUT_FILE}")
 
-# ----------------------------------------------------------
-# Row 3 — best_def_score vs fwd_score
-# ----------------------------------------------------------
-fig.add_trace(
-    go.Scatter(
-        x=df["fwd_score"],
-        y=df["best_def_score"],
-        mode="markers",
-        marker=dict(
-            size=10,
-            color=team_color(df["TEAM"]),
-            opacity=0.85,
-            line=dict(width=0.5, color="black"),
-        ),
-        text=env_text,
-        hovertemplate=(
-            "TEAM/Line: %{text}<br>"
-            "Best Def Score: %{y:.2f}<br>"
-            "Fwd Score: %{x:.2f}<extra></extra>"
-        ),
-        name="Best D vs Fwd Score",
-    ),
-    row=3,
-    col=1,
-)
+with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+    f.write("<html><body>")
+    f.write(legend_text)
+    f.write(fig1.to_html(full_html=False, include_plotlyjs='cdn'))
+    f.write("<hr>")
+    f.write(fig2.to_html(full_html=False, include_plotlyjs=False))
+    f.write("<hr>")
+    f.write(fig3.to_html(full_html=False, include_plotlyjs=False))
+    f.write("<hr>")
+    f.write(fig4.to_html(full_html=False, include_plotlyjs=False))
+    f.write("</body></html>")
 
-fig.update_xaxes(title_text="Forward Stack Score (fwd_score)", row=3, col=1)
-fig.update_yaxes(title_text="Best Defense Stack Score (best_def_score)", row=3, col=1)
-
-fig.add_annotation(
-    row=3,
-    col=1,
-    x=0,
-    y=1.15,
-    xref="x domain",
-    yref="y domain",
-    text=(
-        "Best combined stacks → upper-right (strong forwards + strong D). "
-        "Upper-left = forward-heavy stacks; lower-right = D-heavy but weaker forwards."
-    ),
-    showarrow=False,
-    font=dict(size=11),
-)
-
-# ----------------------------------------------------------
-# Layout
-# ----------------------------------------------------------
-fig.update_layout(
-    height=1600,
-    width=1100,
-    title_text="NHL Line Boom Stack Dashboard",
-    showlegend=False,
-    margin=dict(l=60, r=30, t=80, b=50),
-)
-
-fig.add_annotation(
-    x=0,
-    y=1.08,
-    xref="paper",
-    yref="paper",
-    text=(
-        "Legend/Key: Colors = teams. "
-        "Row 1: elite lines → upper-right. "
-        "Row 2: value D stacks → upper-left. "
-        "Row 3: balanced F + D → upper-right."
-    ),
-    showarrow=False,
-    font=dict(size=11),
-)
-
-# ----------------------------------------------------------
-# Output HTML
-# ----------------------------------------------------------
-print(" Writing HTML report ->", OUTPUT_HTML)
-fig.write_html(OUTPUT_HTML, include_plotlyjs="cdn")
-print(" Done.")
+print("Dashboard written successfully.")
+print(f"Output: {OUTPUT_FILE}")

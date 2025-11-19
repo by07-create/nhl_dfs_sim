@@ -28,7 +28,7 @@ import pandas as pd
 
 
 # ---------------------------------------------------------------------
-# Project paths
+# Project paths (CLOUD-SAFE)
 # ---------------------------------------------------------------------
 PROJECT_DIR = Path(__file__).parent.resolve()
 
@@ -67,7 +67,7 @@ def load_projections(path: Path) -> pd.DataFrame:
 
     # Line key
     if "env_key" not in df.columns:
-        raise ValueError("env_key column missing - required for line-level modeling.")
+        raise ValueError("env_key column missing – required for line-level modeling.")
 
     df["env_key"] = df["env_key"].astype(str)
     df["TEAM"] = df["TEAM"].astype(str).str.upper()
@@ -97,16 +97,19 @@ def load_projections(path: Path) -> pd.DataFrame:
 # Load Vegas O/U from Rotowire file in Downloads
 # ---------------------------------------------------------------------
 def load_rw_vegas_totals() -> Dict[str, float]:
-    """Load Vegas O/U directly from Rotowire NHL player pool file in Downloads."""
+    """
+    Load Vegas O/U directly from Rotowire NHL player pool file in Downloads.
+    On cloud, this will usually just log "not found" and return {}.
+    """
     rw_path = Path.home() / "Downloads" / "rw-nhl-player-pool.xlsx"
     if not rw_path.exists():
-        print(f" RW file not found: {rw_path}")
+        print(f"RW file not found: {rw_path}")
         return {}
 
     try:
         df_rw = pd.read_excel(rw_path)
     except Exception as e:
-        print(f" Failed loading RW file: {e}")
+        print(f"Failed loading RW file: {e}")
         return {}
 
     vegas_cols: List[str] = []
@@ -116,11 +119,11 @@ def load_rw_vegas_totals() -> Dict[str, float]:
             vegas_cols.append(c)
 
     if not vegas_cols:
-        print(" No O/U column found in RW file.")
+        print("No O/U column found in RW file.")
         return {}
 
     col = vegas_cols[0]
-    print(f" Vegas O/U column detected: '{col}'")
+    print(f"Vegas O/U column detected: '{col}'")
 
     df_rw["_vegas"] = pd.to_numeric(df_rw[col], errors="coerce")
 
@@ -130,7 +133,7 @@ def load_rw_vegas_totals() -> Dict[str, float]:
         if len(vals):
             out[str(team).upper()] = float(vals.iloc[0])
 
-    print(f" Loaded {len(out)} Vegas totals.")
+    print(f"Loaded {len(out)} Vegas totals.")
     return out
 
 
@@ -140,7 +143,7 @@ def load_rw_vegas_totals() -> Dict[str, float]:
 def load_matchups_summary() -> Optional[pd.DataFrame]:
     """Load 5v5 line-vs-line matchup summary if present."""
     if not MATCHUPS_FILE.exists():
-        print(f" No 5v5 matchup summary found at {MATCHUPS_FILE}")
+        print(f"No 5v5 matchup summary found at {MATCHUPS_FILE}")
         return None
 
     df = pd.read_csv(MATCHUPS_FILE)
@@ -157,7 +160,7 @@ def load_matchups_summary() -> Optional[pd.DataFrame]:
 
     for c in needed:
         if c not in df.columns:
-            print(f" 5v5 summary missing '{c}' - line-vs-line weighting disabled.")
+            print(f"5v5 summary missing '{c}' – line-vs-line weighting disabled.")
             return None
 
     df["team"] = df["team"].astype(str).str.upper()
@@ -512,10 +515,13 @@ def build_line_model(
                 goalie_mult_raw = 1.0
 
             # Recency tilt using goalie xGA_pg_recency_goalie if present
-            g_xga_rec = pd.to_numeric(
-                opp_goalie_rows.get("xGA_pg_recency_goalie", np.nan),
-                errors="coerce",
-            )
+            if "xGA_pg_recency_goalie" in opp_goalie_rows.columns:
+                g_xga_rec = pd.to_numeric(
+                    opp_goalie_rows["xGA_pg_recency_goalie"],
+                    errors="coerce",
+                )
+            else:
+                g_xga_rec = pd.Series([np.nan] * len(opp_goalie_rows), index=opp_goalie_rows.index)
             g_xga_rec_mean = float(g_xga_rec.replace(0, np.nan).mean())
             if np.isfinite(g_xga_rec_mean) and league_xga > 0:
                 rec_factor = float(np.clip(g_xga_rec_mean / league_xga, 0.8, 1.25))
@@ -714,37 +720,32 @@ def build_line_model(
     # DEFENSE STACK SCORING (which D pairs best with each forward line)
     # -------------------------------------------------------------
 
-    # Split forwards (Lx) and defense units (Px)
-    df_fwd = df_lines[df_lines['line_role'].str.startswith('L')].copy()
-    df_def = df_lines[df_lines['line_role'].str.startswith('P')].copy()
+    # Split forwards and defense units
+    df_fwd = df_lines[df_lines["line_role"].str.startswith('L')].copy()
+    df_def = df_lines[df_lines["line_role"].str.startswith('P')].copy()
 
-    # Compute stack score for each defense line
-    def_stack = []
-    for _, row in df_def.iterrows():
-        score = (
-            row["fld_score"]
-            + 8 * row["fld_line_hdcf"]
-            + 10 * row["pp1_count"]
-            + 5 * row["matchup_mult_mean"]
-            + 6 * row["goalie_mult"]
-            + 2 * row["lvs_mult"]
-        )
-        def_stack.append(score)
-
-    df_def["def_stack_score"] = def_stack
-
-    # DEFENSE LINES SHOULD HAVE THEIR OWN def_stack_score AS best_def_score
+    # --------------------------
+    # Compute DEF stack score
+    # --------------------------
     df_def["best_def_for_line"] = df_def["env_key"]
-    df_def["best_def_score"] = df_def["def_stack_score"]
-    df_def["best_stack_score"] = df_def["def_stack_score"]  # Defense-only stack rating
+    df_def["best_def_score"] = (
+        df_def["fld_score"]
+        + 8 * df_def["fld_line_hdcf"]
+        + 10 * df_def["pp1_count"]
+        + 5 * df_def["matchup_mult_mean"]
+        + 6 * df_def["goalie_mult"]
+        + 2 * df_def["lvs_mult"]
+    )
+    df_def["best_stack_score"] = df_def["best_def_score"]
 
-    # Map defense lines by team
+    # --------------------------
+    # Assign best DEF to FWD lines
+    # --------------------------
     def_by_team = {
-        team: sub.sort_values("def_stack_score", ascending=False)
+        team: sub.sort_values("best_def_score", ascending=False)
         for team, sub in df_def.groupby("TEAM")
     }
 
-    # Add best defense line for each forward line (L1, L2, L3, L4)
     best_def_list = []
     best_def_score_list = []
 
@@ -754,30 +755,27 @@ def build_line_model(
             best_def_list.append(None)
             best_def_score_list.append(0)
             continue
-
         best_def_row = def_by_team[team].iloc[0]
         best_def_list.append(best_def_row["env_key"])
-        best_def_score_list.append(best_def_row["def_stack_score"])
+        best_def_score_list.append(best_def_row["best_def_score"])
 
     df_fwd["best_def_for_line"] = best_def_list
     df_fwd["best_def_score"] = best_def_score_list
 
-    # Merge back into main df_lines
-    df_fd = pd.concat([df_fwd, df_def], ignore_index=True)
-
+    # --------------------------
+    # Merge FWD + DEF stack results back safely
+    # --------------------------
     df_lines = df_lines.merge(
-        df_fd[["TEAM", "env_key", "best_def_for_line", "best_def_score"]],
+        pd.concat([df_fwd, df_def])[["TEAM", "env_key", "best_def_for_line", "best_def_score"]],
         on=["TEAM", "env_key"],
         how="left"
     )
 
-    # Combined stack score = forward score + best defense stack score
+    # Stack score = forward score + best def score (or def-only score)
     df_lines["best_stack_score"] = (
-        df_lines["fwd_score"].fillna(0) +
-        df_lines["best_def_score"].fillna(0)
+        df_lines["fwd_score"].fillna(0)
+        + df_lines["best_def_score"].fillna(0)
     )
-
-
 
     # ----------------------------------------
     # Line salary + value metrics
@@ -806,7 +804,7 @@ def build_line_model(
             df_lines["line_salary_mean"] = 0.0
             df_lines["line_value_score"] = 0.0
     except Exception as e:
-        print(f" Salary aggregation failed: {e}")
+        print(f"Salary aggregation failed: {e}")
         df_lines["line_salary_total"] = df_lines.get("line_salary_total", 0.0)
         df_lines["line_salary_mean"] = df_lines.get("line_salary_mean", 0.0)
         df_lines["line_value_score"] = df_lines.get("line_value_score", 0.0)
@@ -919,14 +917,14 @@ def classify_game(
 # Entry
 # ---------------------------------------------------------------------
 def main(n_sims: int = 10000) -> None:
-    print(f" Loading player projections -> {INPUT_FILE}")
+    print(f"Loading player projections from {INPUT_FILE}")
     df = load_projections(INPUT_FILE)
-    print(f"   Loaded {len(df)} rows.")
+    print(f"Loaded {len(df)} rows.")
 
     vegas_lookup = load_rw_vegas_totals()
     df_matchups = load_matchups_summary()
 
-    print(" Building line-level model (expected goals + boom probability)")
+    print("Building line-level model (expected goals + boom probability)...")
     df_lines = build_line_model(df, df_matchups=df_matchups, n_sims=n_sims)
 
     # Add game_class and vegas_total
@@ -953,9 +951,9 @@ def main(n_sims: int = 10000) -> None:
 
     df_lines["vegas_total"] = df_lines.apply(get_game_vegas_total, axis=1)
 
-    print(f" Writing line model -> {OUTPUT_FILE}")
+    print(f"Writing line model to {OUTPUT_FILE}")
     df_lines.to_csv(OUTPUT_FILE, index=False)
-    print(" Done.")
+    print("Done.")
 
 
 if __name__ == "__main__":
