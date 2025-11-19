@@ -19,7 +19,7 @@ df = pd.read_csv(INPUT_FILE)
 print(f"   Loaded {len(df)} line rows.")
 
 # ----------------------------------------------------------
-# Ensure numeric types (safety)
+# Ensure numeric types
 # ----------------------------------------------------------
 numeric_cols = [
     "fwd_score",
@@ -34,8 +34,10 @@ for col in numeric_cols:
     else:
         print(f" ⚠ Warning: column '{col}' not found in line model.")
 
-# basic safety filter: drop rows with all key metrics missing
-df = df.dropna(subset=["fwd_score", "line_score", "line_salary_total", "best_def_score"], how="all")
+df = df.dropna(
+    subset=["fwd_score", "line_score", "line_salary_total", "best_def_score"],
+    how="all"
+)
 print(f"   After cleaning, {len(df)} rows remain.")
 
 # ----------------------------------------------------------
@@ -51,7 +53,7 @@ color_map = {team: palette[i % len(palette)] for i, team in enumerate(teams)}
 def team_color(series):
     return series.astype(str).map(color_map)
 
-# Marker size based on salary (for charts where it makes sense)
+# Marker size (scaled by salary)
 if "line_salary_total" in df.columns:
     sal = df["line_salary_total"].fillna(0)
     if sal.max() > sal.min():
@@ -61,14 +63,14 @@ if "line_salary_total" in df.columns:
 else:
     size_scaled = pd.Series(12, index=df.index)
 
-env_text = None
-if "env_key" in df.columns:
-    env_text = df["TEAM"].astype(str) + " " + df["env_key"].astype(str)
-else:
-    env_text = df["TEAM"].astype(str)
+env_text = (
+    df["TEAM"].astype(str) + " " + df["env_key"].astype(str)
+    if "env_key" in df.columns
+    else df["TEAM"].astype(str)
+)
 
 # ----------------------------------------------------------
-# Create subplots: 3 rows x 1 column
+# Create subplots: 3 stacked rows
 # ----------------------------------------------------------
 fig = make_subplots(
     rows=3,
@@ -77,7 +79,7 @@ fig = make_subplots(
     vertical_spacing=0.1,
     subplot_titles=(
         "1. Forward Stack Score vs Overall Line Score",
-        "2. Salary vs Best Defense Stack Score",
+        "2. Salary vs Best Defense Stack Score (Defense-Only)",
         "3. Best Defense Score vs Forward Stack Score",
     ),
 )
@@ -104,7 +106,7 @@ fig.add_trace(
             "Line Score: %{x:.2f}<br>"
             "Salary Total: %{customdata[0]:.0f}<extra></extra>"
         ),
-        customdata=df[["line_salary_total"]].values if "line_salary_total" in df.columns else None,
+        customdata=df[["line_salary_total"]].values,
         name="Fwd vs Line Score",
     ),
     row=1,
@@ -130,27 +132,37 @@ fig.add_annotation(
 )
 
 # ----------------------------------------------------------
-# Row 2 — DEFENSIVE PAIRINGS ONLY (P1, P2, P3...) with fallback
+# Row 2 — DEFENSIVE PAIRINGS ONLY (P1, P2, P3...) + None fix
 # ----------------------------------------------------------
 
-# 1) Primary filter: line_role starts with "P"
-df_def = df[df["line_role"].astype(str).str.startswith("P")].copy()
+# 1) Primary: line_role starts with P
+df_def = df[df["line_role"].astype(str).str.startswith("P", na=False)].copy()
 
-# 2) Fallback: check env_key for "_P"
+# 2) Try env_key fallback
 if df_def.empty:
     print("⚠ No P-lines detected via line_role. Scanning env_key instead.")
     df_def = df[df["env_key"].astype(str).str.contains("_P", na=False)].copy()
 
-# 3) Final fallback: use entire dataset to avoid blank chart
+# 3) Final fallback: use full DF (prevents blank chart)
 if df_def.empty:
     print("⚠ WARNING: No defense rows found at all. Using entire DF as fallback.")
     df_def = df.copy()
 
-# Safety fills
-df_def["best_def_score"] = df_def["best_def_score"].fillna(0)
-df_def["line_salary_total"] = df_def["line_salary_total"].fillna(0)
+# --- 🔥 Critical patch: convert "None" → NaN → 0 ---
+df_def["best_def_score"] = (
+    df_def["best_def_score"]
+    .replace("None", None)
+    .astype(float)
+    .fillna(0)
+)
 
-# Scatter now uses df_def instead of df
+df_def["line_salary_total"] = (
+    df_def["line_salary_total"]
+    .replace("None", None)
+    .astype(float)
+    .fillna(0)
+)
+
 fig.add_trace(
     go.Scatter(
         x=df_def["line_salary_total"],
@@ -173,6 +185,9 @@ fig.add_trace(
     row=2,
     col=1,
 )
+
+fig.update_xaxes(title_text="Total Line Salary (line_salary_total)", row=2, col=1)
+fig.update_yaxes(title_text="Best Defense Stack Score (best_def_score)", row=2, col=1)
 
 # ----------------------------------------------------------
 # Row 3 — best_def_score vs fwd_score
@@ -219,7 +234,7 @@ fig.add_annotation(
 )
 
 # ----------------------------------------------------------
-# Global layout + legend / key
+# Layout
 # ----------------------------------------------------------
 fig.update_layout(
     height=1600,
@@ -229,17 +244,16 @@ fig.update_layout(
     margin=dict(l=60, r=30, t=80, b=50),
 )
 
-# Add global key
 fig.add_annotation(
     x=0,
     y=1.08,
     xref="paper",
     yref="paper",
     text=(
-        "Legend/Key: Points = team lines; colors = teams. "
+        "Legend/Key: Colors = teams. "
         "Row 1: elite lines → upper-right. "
         "Row 2: value D stacks → upper-left. "
-        "Row 3: balanced F+D stacks → upper-right."
+        "Row 3: balanced F + D → upper-right."
     ),
     showarrow=False,
     font=dict(size=11),

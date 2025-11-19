@@ -763,8 +763,10 @@ def build_line_model(
     df_fwd["best_def_score"] = best_def_score_list
 
     # Merge back into main df_lines
+    df_fd = pd.concat([df_fwd, df_def], ignore_index=True)
+
     df_lines = df_lines.merge(
-        df_fwd[["TEAM", "env_key", "best_def_for_line", "best_def_score"]],
+        df_fd[["TEAM", "env_key", "best_def_for_line", "best_def_score"]],
         on=["TEAM", "env_key"],
         how="left"
     )
@@ -774,6 +776,7 @@ def build_line_model(
         df_lines["fwd_score"].fillna(0) +
         df_lines["best_def_score"].fillna(0)
     )
+
 
 
     # ----------------------------------------
