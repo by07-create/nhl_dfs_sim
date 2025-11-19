@@ -47,6 +47,7 @@ TEAM_NAME_MAP = {
     "BLUES": "STL",
     "LIGHTNING": "TBL",
     "MAPLE LEAFS": "TOR",
+    "UTAH": "UTA",
     "CANUCKS": "VAN",
     "KNIGHTS": "VGK",
     "CAPITALS": "WSH",
