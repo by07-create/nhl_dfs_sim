@@ -74,7 +74,9 @@ def save_csv(rows):
 
 
 def main():
-    date = datetime.now().strftime("%Y-%m-%d")
+    from zoneinfo import ZoneInfo
+    date = datetime.now(ZoneInfo("America/Chicago")).strftime("%Y-%m-%d")
+
 
     html = fetch_html(date)
     blocks = extract_matchup_blocks(html)
