@@ -1,240 +1,304 @@
-# streamlit_nhl_sim.py – Streamlit NHL DFS front-end (CLOUD-SAFE + UPLOAD MODE)
+# streamlit_nhl_sim.py — Cloud NHL DFS Dashboard (Pipeline + Tables + HTML Charts)
 
+import streamlit as st
 import subprocess
 import sys
 from pathlib import Path
-
 import pandas as pd
-import streamlit as st
-import plotly.express as px
+import streamlit.components.v1 as components
 
-# -------------------------------------------------
-# Cloud-safe project root (NO WINDOWS PATHS)
-# -------------------------------------------------
-PROJECT_DIR = Path(__file__).parent.resolve()
+# ----------------------------------------------------------
+# CLOUD-SAFE ROOT
+# ----------------------------------------------------------
+APP_ROOT = Path(__file__).parent.resolve()
 
-# Output / input files generated during pipeline
-RW_TARGET    = PROJECT_DIR / "rw-nhl-player-pool.xlsx"
-MERGED_FILE  = PROJECT_DIR / "merged_nhl_player_pool.csv"
-PROJ_FILE    = PROJECT_DIR / "nhl_player_projections.csv"
-FD_PROJ_FILE = PROJECT_DIR / "nhl_fd_projections.csv"
-BOOM_FILE    = PROJECT_DIR / "nhl_line_boom_model.csv"
-LINEUPS_FILE = PROJECT_DIR / "nhl_fd_lineups.csv"
-SIM_FILE     = PROJECT_DIR / "nhl_lineup_sim_leaderboard.csv"
 
-# -------------------------------------------------
-# Order the pipeline correctly and safely
-# -------------------------------------------------
-# NOTE: DailyFaceoff may fail in the cloud; fallback needed in the script itself.
-SCRIPT_ORDER = [
-    ("Merge RW + MoneyPuck",           "merge_nhl_data.py"),
-    ("Scrape 5v5 line matchups",       "dailyfaceoff_matchups_scraper.py"),
-    ("Build 5v5 matchup summary",      "build_5v5_matchups.py"),
-    ("Build player projections",       "nhl_projection_engine.py"),
-    ("Export projections for FD",      "nhl_export_for_fd.py"),
-    ("Build line boom model",          "line_boom_model.py"),   # ← correct order
-    ("Merge line goal model",          "merge_line_goal_into_projections.py"),
-]
-
-# -------------------------------------------------
-# Safe script runner (no Windows dependencies)
-# -------------------------------------------------
-def run_script(label: str, script_name: str) -> bool:
-    script_path = PROJECT_DIR / script_name
+# ----------------------------------------------------------
+# Helpers to run scripts and show outputs
+# ----------------------------------------------------------
+def run_script(script_name: str) -> bool:
+    """
+    Execute a Python file inside the same container (Streamlit Cloud safe).
+    Returns True if exit code == 0, else False.
+    """
+    script_path = APP_ROOT / script_name
     if not script_path.exists():
-        st.warning(f"[WARNING] {label}: script not found -> {script_path}")
+        st.error(f"❌ Script not found: {script_path}")
         return False
 
-    st.write(f"### [STEP] {label}")
-    with st.spinner(f"Running {script_name}..."):
+    st.write(f"▶ Running: `{script_name}`")
+    try:
         result = subprocess.run(
             [sys.executable, str(script_path)],
-            cwd=str(PROJECT_DIR),
+            cwd=str(APP_ROOT),
+            check=False,           # don't raise, we handle returncode
             capture_output=True,
-            text=True
+            text=True,
         )
-
-    # Show logs
-    if result.stdout.strip():
-        st.text_area(f"{label} stdout", result.stdout, height=200)
-
-    if result.stderr.strip():
-        st.text_area(f"{label} stderr", result.stderr, height=200)
-
-    if result.returncode != 0:
-        st.error(f"[ERROR] {label} failed (exit code {result.returncode}).")
+    except Exception as e:
+        st.error(f"❌ Failed to execute {script_name}: {e}")
         return False
 
-    st.success(f"[OK] {label} completed successfully.")
+    if result.stdout.strip():
+        with st.expander(f"stdout: {script_name}", expanded=False):
+            st.text(result.stdout)
+
+    if result.stderr.strip():
+        with st.expander(f"stderr: {script_name}", expanded=False):
+            st.text(result.stderr)
+
+    if result.returncode != 0:
+        st.error(f"❌ {script_name} failed with code {result.returncode}")
+        return False
+
+    st.success(f"✅ {script_name} completed")
     return True
 
 
-# -------------------------------------------------
-# CSV preview widget
-# -------------------------------------------------
-def show_csv_preview(path: Path, title: str, n: int = 50):
+def show_csv_preview(path: Path, title: str, rows: int = 100):
+    """Render a CSV as a dataframe with a download button, if it exists."""
+    st.subheader(title)
     if not path.exists():
-        st.warning(f"[WARNING] {title}: file not found -> {path}")
+        st.warning(f"File not found: {path.name}")
         return
 
     try:
         df = pd.read_csv(path)
     except Exception as e:
-        st.error(f"Failed to read {path}: {e}")
+        st.error(f"Failed to read {path.name}: {e}")
         return
 
-    st.write(f"### {title} (top {n})")
-    st.dataframe(df.head(n))
+    st.caption(f"{path.name} — showing top {rows} rows")
+    st.dataframe(df.head(rows), use_container_width=True)
 
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
     st.download_button(
-        label=f"Download {title}",
-        data=df.to_csv(index=False),
+        label=f"⬇ Download {path.name}",
+        data=csv_bytes,
         file_name=path.name,
-        mime="text/csv"
+        mime="text/csv",
     )
 
 
-# -------------------------------------------------
-# MAIN STREAMLIT APP
-# -------------------------------------------------
-def main():
-    st.set_page_config(page_title="NHL DFS Simulator", layout="wide")
-    st.title("NHL DFS Pipeline – RW → MoneyPuck → Lines → Lineups")
-
-    # -------------------------------------------------
-    # 1) Upload Rotowire File
-    # -------------------------------------------------
-    st.header("1) Upload Rotowire Player Pool (XLSX)")
-    rw_file = st.file_uploader(
-        "Upload rw-nhl-player-pool.xlsx",
-        type=["xlsx", "xls"]
-    )
-
-    if rw_file:
-        with open(RW_TARGET, "wb") as f:
-            f.write(rw_file.getbuffer())
-        st.success(f"[OK] Saved Rotowire file to: {RW_TARGET}")
-    else:
-        st.info("Upload the Rotowire file before running the pipeline.")
-
-    # -------------------------------------------------
-    # 2) Run Full Pipeline
-    # -------------------------------------------------
-    st.header("2) Run Full Pipeline")
-
-    if st.button("Run Pipeline"):
-        if not RW_TARGET.exists():
-            st.error("Missing Rotowire file. Upload before running.")
-        else:
-            all_ok = True
-            for label, script in SCRIPT_ORDER:
-                if not run_script(label, script):
-                    all_ok = False
-                    break
-
-            if all_ok:
-                st.success("🎉 Pipeline completed successfully!")
-
-    # -------------------------------------------------
-    # 3) Output Previews
-    # -------------------------------------------------
-    st.header("3) Output Files")
-
-    col1, col2 = st.columns(2)
-    with col1:
-        show_csv_preview(PROJ_FILE,    "Player Projections")
-        show_csv_preview(FD_PROJ_FILE, "FanDuel Projections")
-        show_csv_preview(BOOM_FILE,    "Line Boom Model")
-
-    with col2:
-        show_csv_preview(MERGED_FILE,  "Merged RW + MoneyPuck Data")
-
-    # -------------------------------------------------
-    # 4) Boom Model Charts
-    # -------------------------------------------------
-    st.header("4) Line Boom Charts – Forward / Defense / Combined")
-
-    tabs = st.tabs([
-        "Forward Lines",
-        "Defense Stacks",
-        "Combined F+D",
-        "Legend"
-    ])
-
-    if not BOOM_FILE.exists():
-        for t in tabs:
-            with t:
-                st.warning("Run pipeline first. Boom model not found.")
+def show_html_report(path: Path, title: str, height: int = 900):
+    """Embed an HTML report (from line_boom_chart.py) inside Streamlit."""
+    st.subheader(title)
+    if not path.exists():
+        st.warning(f"HTML report not found: {path.name}. Run the boom chart script.")
         return
 
-    df = pd.read_csv(BOOM_FILE).copy()
+    try:
+        html_str = path.read_text(encoding="utf-8")
+    except Exception as e:
+        st.error(f"Failed to read {path.name}: {e}")
+        return
 
-    # rebuild line_role reliably
-    df["line_role"] = (
-        df["env_key"]
-        .astype(str)
-        .str.upper()
-        .str.extract(r"_(P\d+|L\d+)", expand=False)
-        .fillna("")
+    components.html(html_str, height=height, scrolling=True)
+
+
+# ----------------------------------------------------------
+# Files we care about
+# ----------------------------------------------------------
+RW_FILE              = APP_ROOT / "rw-nhl-player-pool.xlsx"
+MERGED_FILE          = APP_ROOT / "merged_nhl_player_pool.csv"
+MATCHUPS_RAW_FILE    = APP_ROOT / "5v5_matchups.csv"
+MATCHUPS_SUMMARY     = APP_ROOT / "5v5_matchups_summary.csv"
+PROJ_FILE            = APP_ROOT / "nhl_player_projections.csv"
+LINE_MODEL_FILE      = APP_ROOT / "line_goal_model.csv"
+BOOM_MODEL_FILE      = APP_ROOT / "nhl_line_boom_model.csv"
+FD_PROJ_FILE         = APP_ROOT / "nhl_fd_projections.csv"
+BOOM_HTML_REPORT     = APP_ROOT / "nhl_line_boom_charts.html"  # from line_boom_chart.py
+
+
+# ----------------------------------------------------------
+# PIPELINE ORDER (with line model, no lineup builder/sim)
+# ----------------------------------------------------------
+SCRIPT_ORDER = [
+    ("Merge RW + MoneyPuck",          "merge_nhl_data.py"),
+    ("Scrape 5v5 Matchups",           "dailyfaceoff_matchups_scraper.py"),
+    ("Build 5v5 Matchup Summary",     "build_5v5_matchups.py"),
+    ("Build Player Projections",      "nhl_projection_engine.py"),
+    ("Build Line Goal Model",         "nhl_line_model.py"),
+    ("Export Projections for FD",     "nhl_export_for_fd.py"),
+    ("Build Line Boom Model",         "line_boom_model.py"),
+    ("Merge Line Goal Model",         "merge_line_goal_into_projections.py"),
+    # Charts are separate: line_boom_chart.py reads nhl_line_boom_model.csv
+]
+
+
+# ----------------------------------------------------------
+# STREAMLIT PAGE LAYOUT
+# ----------------------------------------------------------
+st.set_page_config(
+    page_title="NHL DFS Cloud Dashboard",
+    layout="wide",
+)
+
+st.title("🏒 NHL DFS Cloud Dashboard")
+
+st.markdown(
+    """
+This app runs your **full NHL DFS pipeline** in the cloud and shows:
+
+- Merged Rotowire + MoneyPuck player pool  
+- 5v5 line matchups & summary  
+- Player projection engine output  
+- **Line goal model** (lambda_total, p_goal_line, chemistry)  
+- **Line boom model** (stack scores, matchup metrics)  
+- FanDuel-ready projection export  
+- HTML dashboard from `line_boom_chart.py` (Option B)
+"""
+)
+
+tabs = st.tabs(
+    [
+        "1️⃣ Pipeline & Inputs",
+        "2️⃣ Core Tables",
+        "3️⃣ Line Models (Goal & Boom)",
+        "4️⃣ Boom Charts (HTML Report)",
+    ]
+)
+
+# ----------------------------------------------------------
+# TAB 1 — Pipeline & Inputs
+# ----------------------------------------------------------
+with tabs[0]:
+    st.header("📤 Upload Inputs")
+
+    col_u1, col_u2 = st.columns(2)
+
+    with col_u1:
+        uploaded_rw = st.file_uploader(
+            "Rotowire Player Pool (rw-nhl-player-pool.xlsx)",
+            type=["xlsx"],
+            key="rw_upload",
+        )
+        if uploaded_rw:
+            with open(RW_FILE, "wb") as f:
+                f.write(uploaded_rw.getbuffer())
+            st.success(f"Saved: {RW_FILE.name}")
+
+    with col_u2:
+        uploaded_5v5 = st.file_uploader(
+            "Optional 5v5 Matchups CSV (fallback for scraper)",
+            type=["csv"],
+            key="matchups_upload",
+        )
+        if uploaded_5v5:
+            with open(MATCHUPS_RAW_FILE, "wb") as f:
+                f.write(uploaded_5v5.getbuffer())
+            st.success(f"Saved fallback: {MATCHUPS_RAW_FILE.name}")
+
+    st.markdown("---")
+
+    st.header("🚀 Run Full Pipeline")
+
+    if st.button("Run Full Pipeline Now"):
+        if not RW_FILE.exists():
+            st.error("Rotowire file missing. Upload rw-nhl-player-pool.xlsx first.")
+        else:
+            for label, script in SCRIPT_ORDER:
+                st.write(f"### ▶ {label}")
+                ok = run_script(script)
+                if not ok:
+                    st.error(f"🛑 Pipeline stopped at: {label}")
+                    break
+            else:
+                st.success("🎉 Pipeline completed successfully.")
+
+    st.markdown("---")
+
+    st.header("Quick Input File Check")
+    col_i1, col_i2, col_i3 = st.columns(3)
+    with col_i1:
+        st.write("RW File:")
+        st.code(str(RW_FILE))
+        st.write("✅" if RW_FILE.exists() else "❌ Missing")
+
+    with col_i2:
+        st.write("5v5 Raw:")
+        st.code(str(MATCHUPS_RAW_FILE))
+        st.write("✅" if MATCHUPS_RAW_FILE.exists() else "⚠ Optional / Missing")
+
+    with col_i3:
+        st.write("Merged Pool:")
+        st.code(str(MERGED_FILE))
+        st.write("✅" if MERGED_FILE.exists() else "❌ Missing (run pipeline)")
+
+
+# ----------------------------------------------------------
+# TAB 2 — Core Tables (Merged, 5v5, Projections)
+# ----------------------------------------------------------
+with tabs[1]:
+    st.header("📊 Core Data Tables")
+
+    st.markdown("### A. Merged Rotowire + MoneyPuck Player Pool")
+    show_csv_preview(MERGED_FILE, "Merged Player Pool")
+
+    st.markdown("---")
+
+    col_m1, col_m2 = st.columns(2)
+    with col_m1:
+        st.markdown("### B. Raw 5v5 Matchups")
+        show_csv_preview(MATCHUPS_RAW_FILE, "5v5 Raw Matchups")
+    with col_m2:
+        st.markdown("### C. 5v5 Matchup Summary")
+        show_csv_preview(MATCHUPS_SUMMARY, "5v5 Matchup Summary")
+
+    st.markdown("---")
+
+    st.markdown("### D. Player Projections")
+    show_csv_preview(PROJ_FILE, "Player Projections (nhl_player_projections.csv)")
+
+
+# ----------------------------------------------------------
+# TAB 3 — Line Models (Goal & Boom)
+# ----------------------------------------------------------
+with tabs[2]:
+    st.header("🎯 Line Models: Goal & Boom")
+
+    col_l1, col_l2 = st.columns(2)
+
+    with col_l1:
+        st.markdown("### Line Goal Model")
+        st.caption(
+            "From nhl_line_model.py → line_goal_model.csv\n"
+            "- lambda_total\n"
+            "- p_goal_line\n"
+            "- chemistry_score\n"
+        )
+        show_csv_preview(LINE_MODEL_FILE, "Line Goal Model")
+
+    with col_l2:
+        st.markdown("### Line Boom Model")
+        st.caption(
+            "From line_boom_model.py → nhl_line_boom_model.csv\n"
+            "- fwd_score / fld_score\n"
+            "- matchup_mult / line_strength_norm\n"
+            "- line_matchup_strength\n"
+            "- boom_score / stack metrics\n"
+        )
+        show_csv_preview(BOOM_MODEL_FILE, "Line Boom Model")
+
+    st.markdown("---")
+
+    st.markdown("### FanDuel Projection Export")
+    show_csv_preview(FD_PROJ_FILE, "FD Projections (nhl_fd_projections.csv)")
+
+
+# ----------------------------------------------------------
+# TAB 4 — Boom Charts (HTML from line_boom_chart.py)
+# ----------------------------------------------------------
+with tabs[3]:
+    st.header("📈 Boom Charts (HTML Report)")
+    st.markdown(
+        """
+This tab loads the **pre-rendered Plotly dashboard** generated by:
+- `line_boom_chart.py` → `nhl_line_boom_charts.html`
+
+If you haven't run that script yet, do it once (locally or via a new button),
+commit the HTML file, or add a simple runner button in this app.
+"""
     )
 
-    # TAB 1 — Forward Lines
-    with tabs[0]:
-        df_fwd = df[df["line_role"].str.startswith("L", na=False)].copy()
-        fig = px.scatter(
-            df_fwd,
-            x="line_score",
-            y="fwd_score",
-            size="best_stack_score",
-            color="TEAM",
-            hover_name="env_key",
-            title="Forward Lines – Line Score vs FWD Score"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    # TAB 2 — Defense Stacks
-    with tabs[1]:
-        df_def = df[df["line_role"].str.startswith("P", na=False)].copy()
-        if df_def.empty:
-            df_def = df[df["env_key"].str.contains("_P", na=False)].copy()
-        fig = px.scatter(
-            df_def,
-            x="line_salary_total",
-            y="best_def_score",
-            color="TEAM",
-            hover_name="env_key",
-            title="Defense Stacks – Salary vs D-Stack Score"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    # TAB 3 — Combined F + D
-    with tabs[2]:
-        df_fwd = df[df["line_role"].str.startswith("L", na=False)]
-        fig = px.scatter(
-            df_fwd,
-            x="fwd_score",
-            y="best_def_score",
-            size="best_stack_score",
-            color="TEAM",
-            hover_name="env_key",
-            title="Best Combined F + D Stacks"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    # TAB 4 — Legend
-    with tabs[3]:
-        st.markdown("""
-        ### Legend / Key
-        - **line_score** – Full-line DFS composite score  
-        - **fwd_score** – Forward-only ceiling  
-        - **fld_score** – Full-line (F + D) scoring  
-        - **best_def_score** – Strength of best pairing with this line  
-        - **best_stack_score** – FWD + D-stack synergy  
-        - **matchup_mult_mean** – Soft/hard matchup indicator  
-        - **goalie_mult** – Opposing goalie weakness multiplier  
-        """)
-
-
-
-if __name__ == "__main__":
-    main()
+    show_html_report(BOOM_HTML_REPORT, "NHL Line Boom Charts Report")
