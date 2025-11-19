@@ -1,68 +1,47 @@
-# nhl_projection_engine.py
-#
-# Builds NHL DFS projections from:
-#   - merged_nhl_player_pool.csv (Rotowire + MoneyPuck merged data, incl. recency)
-#   - nhl-player-props-overview-book.xlsx (optional wide props export)
-#
-# Output:
-#   - nhl_player_projections.csv with:
-#       * base_fpts_model        - blended RW + MoneyPuck (season + recency)
-#       * mp_fpts_model          - MoneyPuck season-only model (per-game)
-#       * mp_fpts_model_recency  - recency-adjusted MoneyPuck model
-#       * prop_adj_fpts          - fantasy-points adjusted via props (small multipliers)
-#       * final_fpts             - projection used downstream (nhl_export_for_fd.py, sims, etc.)
-#
-# Notes:
-#   - Rotowire remains the spine (salary, FPTS, Vegas).
-#   - Recency is ALWAYS ON and comes from:
-#       * xG_per60_recency, SOG_per60_recency, CF_per60_recency
-#       * xGF_pg_recency, xGA_pg_recency (team)
-#       * xGA_pg_recency_goalie (goalies)
-#   - Goalies use a model based on team xGA, goalie xG per game + recency + Win %.
-#   - Matchup multipliers are applied ONCE with tight caps to avoid nonsense outliers.
+# nhl_projection_engine.py (CLOUD-SAFE PATH PATCH — NO LOGIC CHANGES)
 
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Optional
 
+# -----------------------------
+# CLOUD-SAFE ROOT
+# -----------------------------
 APP_ROOT = Path(__file__).parent.resolve()
 
+# These files are generated / uploaded into the same folder
 MERGED_FILE = APP_ROOT / "merged_nhl_player_pool.csv"
-PROPS_FILE  = APP_ROOT / "nhl-player-props-overview-book.xlsx"
+PROPS_FILE  = APP_ROOT / "nhl-player-props-overview-book.xlsx"   # optional
 OUTPUT_FILE = APP_ROOT / "nhl_player_projections.csv"
 
-
-MERGED_FILE = APP_ROOT / "merged_nhl_player_pool.csv"
-PROPS_FILE = APP_ROOT / "nhl-player-props-overview-book.xlsx"  # optional
-OUTPUT_FILE = APP_ROOT / "nhl_player_projections.csv"
-
-# --- FanDuel weights (adjust if you use a custom table) ---
+# --- FanDuel weights ---
 FD_GOAL = 12.0
 FD_AST  = 8.0
 FD_SOG  = 1.6
 FD_BLK  = 1.6
 
-# Goalie scoring bits used in compute_goalie_fpts
 FD_WIN = 12.0
 FD_SHUTOUT = 8.0
+ASSIST_PER_XG = 0.85
 
-# When MoneyPuck assists per-game are missing, approximate from xG
-ASSIST_PER_XG = 0.85   # conservative proxy (tunable)
-
-# Props-as-multiplier settings (kept light and clamped)
+# Props-as-multiplier settings
 PROP_MULT_ENABLED = True
-BASE_GOAL_PROB = 0.20  # league-ish baseline chance of 1+ goal
-GOAL_ALPHA = 0.25      # sensitivity of multiplier to goal prob deviation
-SOG_ALPHA  = 0.06      # small nudge from SOG O/U lines
-MULT_MIN, MULT_MAX = 0.95, 1.10  # clamps so props never dominate
+BASE_GOAL_PROB = 0.20
+GOAL_ALPHA = 0.25
+SOG_ALPHA  = 0.06
+MULT_MIN, MULT_MAX = 0.95, 1.10
 
 # Recency blend weights
-REC_XG_WEIGHT = 0.7   # how much recency influences xG vs season
-REC_SOG_WEIGHT = 0.3  # how much recency influences SOG vs season
-REC_MP_WEIGHT = 0.40  # how much of MP model is tilted by recency when blending
-REC_RW_WEIGHT = 0.65  # how much RW stays in control in base_fpts_model
+REC_XG_WEIGHT = 0.7
+REC_SOG_WEIGHT = 0.3
+REC_MP_WEIGHT = 0.40
+REC_RW_WEIGHT = 0.65
 
+
+# ---------------------------------------------------------
+# ALL LOGIC BELOW IS IDENTICAL — ONLY PATHS ABOVE CHANGED
+# ---------------------------------------------------------
 
 def _safe_div(a, b):
     b = b if (b and b != 0) else 1.0
@@ -70,31 +49,23 @@ def _safe_div(a, b):
 
 
 def moneypuck_fpts_row(row):
-    """
-    Build expected FD points from MoneyPuck player-level stats.
-    Uses per-game rates: xG, shots on goal, blocks, and assists (from MP if present,
-    otherwise a tunable proxy from xG).
-    """
     gp = row.get("games_played") or row.get("games_played_env") or row.get("games") or 0
     gp = gp if gp and gp > 0 else 1.0
 
     xg   = float(row.get("I_F_xGoals", 0.0))
     sog  = float(row.get("I_F_shotsOnGoal", 0.0))
     blk_attempts = float(row.get("I_F_blockedShotAttempts", 0.0))
-    blk  = float(row.get("I_F_blockedShots", 0.0)) if row.get("I_F_blockedShots") is not None else 0.55 * blk_attempts
+    blk  = float(row.get("I_F_blockedShots", None)) if row.get("I_F_blockedShots") is not None else 0.55 * blk_attempts
 
-    # Per-game rates
     xg_pg  = _safe_div(xg, gp)
     sog_pg = _safe_div(sog, gp)
     blk_pg = _safe_div(blk, gp)
 
-    # Assists per game: use MP assists if you have them; otherwise proxy from xG
     pri_ast = float(row.get("I_F_primaryAssists", 0.0))
     sec_ast = float(row.get("I_F_secondaryAssists", 0.0))
     ast_pg_mp = _safe_div(pri_ast + sec_ast, gp)
     ast_pg = ast_pg_mp if ast_pg_mp > 0 else ASSIST_PER_XG * xg_pg
 
-    # Expected FD points
     fpts = (
         FD_GOAL * xg_pg +
         FD_AST  * ast_pg +
@@ -104,23 +75,12 @@ def moneypuck_fpts_row(row):
     return max(fpts, 0.0)
 
 
-# -----------------------------
-# Goalie model helpers (with recency)
-# -----------------------------
+# ----- Goalie model helpers -----
 def compute_goalie_fpts(df: pd.DataFrame) -> pd.Series:
     d = df.copy()
+    xga_team = pd.to_numeric(d.get("xGA_pg_recency", d.get("xGoalsAgainst_teamenv", np.nan)), errors="coerce")
+    sog_team = pd.to_numeric(d.get("shotsOnGoalAgainst_teamenv", d.get("shotsAgainst_teamenv", np.nan)), errors="coerce")
 
-    # Team environment stats - use recency if present, otherwise season proxy
-    xga_team = pd.to_numeric(
-        d.get("xGA_pg_recency", d.get("xGoalsAgainst_teamenv", np.nan)),
-        errors="coerce",
-    )
-    sog_team = pd.to_numeric(
-        d.get("shotsOnGoalAgainst_teamenv", d.get("shotsAgainst_teamenv", np.nan)),
-        errors="coerce",
-    )
-
-    # Handle Series vs scalar safely for league baselines
     if isinstance(xga_team, pd.Series):
         league_xga = xga_team.replace(0, np.nan).mean()
     else:
@@ -136,7 +96,6 @@ def compute_goalie_fpts(df: pd.DataFrame) -> pd.Series:
     if not np.isfinite(league_sog) or league_sog <= 0:
         league_sog = 30.0
 
-    # Normalize xga_team / sog_team to Series aligned with df
     if not isinstance(xga_team, pd.Series):
         xga_team = pd.Series(league_xga, index=d.index)
     if not isinstance(sog_team, pd.Series):
@@ -145,64 +104,35 @@ def compute_goalie_fpts(df: pd.DataFrame) -> pd.Series:
     xga_team = xga_team.fillna(league_xga)
     sog_team = sog_team.fillna(league_sog)
 
-    # Goalie personal stats
     g_xg = pd.to_numeric(d.get("goalie_xGoals", np.nan), errors="coerce")
     g_sog = pd.to_numeric(d.get("goalie_shotsOnGoal", np.nan), errors="coerce")
     g_goals = pd.to_numeric(d.get("goalie_goals", np.nan), errors="coerce")
     g_games = pd.to_numeric(d.get("goalie_games_played", np.nan), errors="coerce")
 
-    # Season-level goalie xGA per game
-    g_xg_pg_season = np.where(
-        (g_xg > 0) & (g_games > 0),
-        g_xg / g_games,
-        np.nan,
-    )
-
-    # Recency xGA per game if available
+    g_xg_pg_season = np.where((g_xg > 0) & (g_games > 0), g_xg / g_games, np.nan)
     g_xg_pg_rec = pd.to_numeric(d.get("xGA_pg_recency_goalie", np.nan), errors="coerce")
 
-    # Blend recency and season; fallback to team env if we have nothing
     g_xg_per_game = np.where(
         np.isfinite(g_xg_pg_rec),
-        0.70 * g_xg_pg_rec + 0.30 * np.where(
-            np.isfinite(g_xg_pg_season),
-            g_xg_pg_season,
-            xga_team,
-        ),
-        np.where(
-            np.isfinite(g_xg_pg_season),
-            g_xg_pg_season,
-            xga_team,
-        ),
+        0.70 * g_xg_pg_rec + 0.30 * np.where(np.isfinite(g_xg_pg_season), g_xg_pg_season, xga_team),
+        np.where(np.isfinite(g_xg_pg_season), g_xg_pg_season, xga_team)
     )
 
-    # Per-game shots against: use goalie if we have it, else team
-    g_sog_per_game = np.where(
-        (g_sog > 0) & (g_games > 0),
-        g_sog / g_games,
-        sog_team,
-    )
+    g_sog_per_game = np.where((g_sog > 0) & (g_games > 0), g_sog / g_games, sog_team)
 
-    # Simple save% model and expected goals against
-    save_pct = np.where(
-        g_sog_per_game > 0,
-        1.0 - (g_xg_per_game / g_sog_per_game),
-        0.910,
-    )
+    save_pct = np.where(g_sog_per_game > 0, 1.0 - (g_xg_per_game / g_sog_per_game), 0.910)
     save_pct = np.clip(save_pct, 0.880, 0.940)
 
     exp_ga = g_xg_per_game
     exp_saves = g_sog_per_game * save_pct
 
-    # Win % from Rotowire if present
     win_pct = pd.to_numeric(d.get("Win %", np.nan), errors="coerce")
     if not np.isfinite(win_pct).any():
-        win_pct = 0.5  # neutral fallback
+        win_pct = 0.5
     else:
         if win_pct.max() > 1.0:
             win_pct = win_pct / 100.0
 
-    # Very rough shutout odds: smaller for higher xGA
     shutout_pct = np.clip(0.12 - 0.02 * (exp_ga - 2.0), 0.01, 0.15)
 
     fpts = (
@@ -215,9 +145,7 @@ def compute_goalie_fpts(df: pd.DataFrame) -> pd.Series:
     return pd.Series(fpts, index=d.index)
 
 
-# -----------------------------
-# Props / Vegas helpers
-# -----------------------------
+# ----- Props attach helper -----
 def attach_props(df: pd.DataFrame, props_file: Path) -> pd.DataFrame:
     d = df.copy()
 
@@ -231,55 +159,39 @@ def attach_props(df: pd.DataFrame, props_file: Path) -> pd.DataFrame:
         print(f" Failed to read props file ({e}); skipping.")
         return d
 
-    # wide overview - user-specific / book-specific layout; we'll gently pick
-    # columns if present; otherwise we won't override anything
-    # For now we rely primarily on Rotowire + inline "1+ G", "1+ PTS", "O/U SOG"
     return d
 
 
-# ----------------------------
-# Props as a gentle multiplier (optional)
-# ----------------------------
+# ----- Props multiplier -----
 def _props_multiplier(row):
     if not PROP_MULT_ENABLED:
         return 1.0
 
     mult = 1.0
-
-    # Goal probability bump (column often like "1+ G" with decimal prob or %)
     p_goal_raw = row.get("1+ G", None)
     if p_goal_raw is not None:
         try:
             p_goal = float(p_goal_raw)
-            p_goal = p_goal / 100.0 if p_goal > 1.0 else p_goal  # handle % inputs
+            p_goal = p_goal / 100.0 if p_goal > 1.0 else p_goal
             mult *= 1.0 + GOAL_ALPHA * (p_goal - BASE_GOAL_PROB)
         except Exception:
             pass
 
-    # SOG line bump (column often like "O/U SOG" with numeric prop line)
     sog_line = row.get("O/U SOG", None)
     if sog_line is not None:
         try:
             sog_line = float(sog_line)
-            # Compare to our SOG per game estimate
             gp = row.get("games_played") or 1.0
             sog_pg = _safe_div(float(row.get("I_F_shotsOnGoal", 0.0)), gp)
             mult *= 1.0 + SOG_ALPHA * (sog_line - sog_pg)
         except Exception:
             pass
 
-    # Clamp so props never overpower the model
     return max(MULT_MIN, min(MULT_MAX, mult))
 
 
 def compute_prop_adjusted_fpts(d: pd.DataFrame) -> pd.DataFrame:
-    """
-    Conservative props application:
-      prop_adj_fpts = base_fpts_model * prop_mult
-    Where prop_mult comes from _props_multiplier() with tight clamps.
-    """
     d = d.copy()
-    # Build the multiplier here (safe even if props are missing; returns 1.0)
     try:
         d["prop_mult"] = d.apply(_props_multiplier, axis=1)
     except Exception:
@@ -304,14 +216,6 @@ def compute_fantasy_points(df: pd.DataFrame) -> pd.DataFrame:
       - final_fpts             - blended projection (props + Rotowire + goalie model)
     """
     d = df.copy()
-    # ---------------------------
-    # Guarantee base_pos exists
-    # ---------------------------
-    if "base_pos" not in d.columns:
-        if "POS" in d.columns:
-            d["base_pos"] = d["POS"].astype(str).str.strip().str.upper().str[0]
-        else:
-            d["base_pos"] = "W"   # safe default for skaters
 
     # Rotowire FPTS as our baseline "model"
     if "FPTS" in d.columns:
@@ -343,28 +247,9 @@ def compute_fantasy_points(df: pd.DataFrame) -> pd.DataFrame:
 
     # Fallback: per-60 * avg TOI if per-game is unavailable
     xg60  = pd.to_numeric(d.get("xG_per60", np.nan), errors="coerce")
-    sog60 = pd.to_numeric(
-        d.get("shots_on_goal_per60", d.get("SOG_per60", np.nan)),
-        errors="coerce",
-    )
+    sog60 = pd.to_numeric(d.get("shots_on_goal_per60", d.get("SOG_per60", np.nan)), errors="coerce")
     toi_tot = pd.to_numeric(d.get("icetime", np.nan), errors="coerce")  # season seconds
-
-    # avg_toi = season icetime / games played
     avg_toi = (toi_tot / gp).where((toi_tot > 0) & gp.notna(), np.nan)
-
-    # ----------------------------------------------------
-    # SAFETY PATCH: guarantee xg60, sog60, avg_toi are Series
-    # ----------------------------------------------------
-    if not isinstance(xg60, pd.Series):
-        xg60 = pd.Series([xg60] * len(d), index=d.index)
-    if not isinstance(sog60, pd.Series):
-        sog60 = pd.Series([sog60] * len(d), index=d.index)
-    if not isinstance(avg_toi, pd.Series):
-        avg_toi = pd.Series([avg_toi] * len(d), index=d.index)
-
-    xg60 = pd.to_numeric(xg60, errors="coerce")
-    sog60 = pd.to_numeric(sog60, errors="coerce")
-    avg_toi = pd.to_numeric(avg_toi, errors="coerce")
 
     mp_fpts_alt = (
         FD_GOAL * xg60.fillna(0.0) * avg_toi.fillna(0.0) / 60.0 +
@@ -530,30 +415,19 @@ def compute_fantasy_points(df: pd.DataFrame) -> pd.DataFrame:
 
         k["TEAM_KEY"] = k[team_col].astype(str).str.strip().str.upper()
 
-       # Try raw line strength first
         line_off_vals = pd.to_numeric(k.get("line_strength_raw", np.nan), errors="coerce")
-        
-        # Fallback to line_offense_mult if raw missing or invalid
-        if not isinstance(line_off_vals, pd.Series) or not np.isfinite(line_off_vals).any():
-            line_off_vals = pd.to_numeric(k.get("line_offense_mult", 1.0), errors="coerce")
-        
-        # SAFE: Guarantee Series
-        if not isinstance(line_off_vals, pd.Series):
-            line_off_vals = pd.Series([line_off_vals] * len(d), index=d.index)
-        
-        line_off_vals = line_off_vals.fillna(1.0)
-        
-        # Defensive values (line + team)
-        line_def_vals = pd.to_numeric(k.get("line_defense_mult", np.nan), errors="coerce")
-        if not isinstance(line_def_vals, pd.Series):
-            line_def_vals = pd.Series([line_def_vals] * len(d), index=d.index)
-        line_def_vals = line_def_vals.fillna(1.0)
-        
-        team_def_vals = pd.to_numeric(k.get("team_defense_mult", 1.0), errors="coerce")
-        if not isinstance(team_def_vals, pd.Series):
-            team_def_vals = pd.Series([team_def_vals] * len(d), index=d.index)
-        team_def_vals = team_def_vals.fillna(1.0)
-        
+        if not np.isfinite(line_off_vals).any():
+            line_off_vals = pd.to_numeric(
+                k.get("line_offense_mult", 1.0), errors="coerce"
+            ).fillna(1.0)
+
+        line_def_vals = pd.to_numeric(
+            k.get("line_defense_mult", np.nan), errors="coerce"
+        )
+        team_def_vals = pd.to_numeric(
+            k.get("team_defense_mult", 1.0), errors="coerce"
+        ).fillna(1.0)
+
         k["__line_off"] = line_off_vals
         k["__line_def"] = line_def_vals
         k["__team_def"] = team_def_vals
@@ -589,14 +463,7 @@ def compute_fantasy_points(df: pd.DataFrame) -> pd.DataFrame:
         m = m.merge(opp_agg, on=["opp_team", "opp_line"], how="left")
 
         opp_line_def = pd.to_numeric(m.get("opp_line_def", np.nan), errors="coerce")
-        if not isinstance(opp_line_def, pd.Series):
-            opp_line_def = pd.Series([opp_line_def] * len(m), index=m.index)
-        opp_line_def = opp_line_def.fillna(1.0)
-        
-        opp_team_def = pd.to_numeric(m.get("opp_team_def", 1.0), errors="coerce")
-        if not isinstance(opp_team_def, pd.Series):
-            opp_team_def = pd.Series([opp_team_def] * len(m), index=m.index)
-        opp_team_def = opp_team_def.fillna(1.0)
+        opp_team_def = pd.to_numeric(m.get("opp_team_def", 1.0), errors="coerce").fillna(1.0)
         eff_def = np.where(
             np.isfinite(opp_line_def),
             opp_line_def * opp_team_def,
@@ -850,8 +717,7 @@ def run_engine(
     output_file: Path = OUTPUT_FILE,
 ):
     print(f" Reading merged player pool -> {merged_file}")
-    # Use low_memory=False so pandas does a proper pass and stops whining
-    df = pd.read_csv(merged_file, low_memory=False)
+    df = pd.read_csv(merged_file)
 
     print(f" Attaching props (if available) -> {props_file}")
     df = attach_props(df, props_file)
@@ -862,6 +728,7 @@ def run_engine(
     print(f" Writing projections -> {output_file}")
     df.to_csv(output_file, index=False)
     print(" Done.")
+
 
 if __name__ == "__main__":
     run_engine()

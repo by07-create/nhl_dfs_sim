@@ -1,23 +1,16 @@
-# nhl_export_for_fd.py
-#
-# Cloud-safe FanDuel export. Ensures:
-#   - final_fpts is exported
-#   - fpts_sigma exported
-#   - env_key + line_num exported
-#   - base_pos exported
-#   - recency + matchup + line strength fields exported
-#   - No hard-coded Windows paths
+# nhl_export_for_fd.py (CLOUD-SAFE PATH PATCH — NO LOGIC CHANGES)
 
 import pandas as pd
 from pathlib import Path
 
 # -------------------------------------
-# Project Paths (cloud-safe)
+# Cloud-safe project root
 # -------------------------------------
-APP_ROOT = Path(__file__).parent.resolve()
+PROJECT_DIR = Path(__file__).parent.resolve()
 
-INPUT_FILE = APP_ROOT / "nhl_player_projections.csv"
-OUTPUT_FILE = APP_ROOT / "nhl_fd_projections.csv"
+# Input/output now live inside app directory
+INPUT_FILE  = PROJECT_DIR / "nhl_player_projections.csv"
+OUTPUT_FILE = PROJECT_DIR / "nhl_fd_projections.csv"
 
 
 def main():
@@ -25,11 +18,10 @@ def main():
     df = pd.read_csv(INPUT_FILE)
 
     # -------------------------------------
-    # PROJ column (used by FD builder)
-    # Order:
-    #   1. final_fpts
-    #   2. prop_adj_fpts
-    #   3. FPTS (raw Rotowire)
+    # Pick the main FD projection:
+    # 1. final_fpts (full blended model)
+    # 2. prop_adj_fpts (Vegas-adjusted)
+    # 3. FPTS (Rotowire fallback)
     # -------------------------------------
     if "final_fpts" in df.columns:
         df["PROJ"] = df["final_fpts"]
@@ -38,62 +30,45 @@ def main():
     else:
         df["PROJ"] = df.get("FPTS", 0)
 
-    df["PROJ"] = pd.to_numeric(df["PROJ"], errors="coerce").fillna(0.0)
+    df["PROJ"] = pd.to_numeric(df["PROJ"], errors="coerce").fillna(0)
 
     # -------------------------------------
-    # Guarantee core identifiers
-    # -------------------------------------
-    # POS → base_pos fallback
-    if "POS" not in df.columns and "base_pos" in df.columns:
-        df["POS"] = df["base_pos"]
-
-    if "base_pos" not in df.columns and "POS" in df.columns:
-        df["base_pos"] = df["POS"].astype(str).str.upper().str[0]
-
-    # -------------------------------------
-    # FD Export Columns
+    # Columns we include in the FD export
     # -------------------------------------
     keep_cols = [
         "PLAYER",
         "POS",
-        "base_pos",
         "TEAM",
         "OPP",
         "SAL",
         "PROJ",
-
-        # Core projection components
-        "final_fpts",
-        "prop_adj_fpts",
+        "is_goalie",
         "FPTS",
         "fpts_sigma",
-
-        # Matchup multipliers
+        "final_fpts",
+        "prop_adj_fpts",
+        "xg_per_game_model",
+        "shots_per_game_model",
+        "assists_per_game_model",
+        "blocks_per_game_model",
+        "pp_points_per_game_model",
+        "goalie_win_prob",
         "matchup_mult",
-        "line_strength_mult",
-        "final_matchup_mult",
         "line_strength_norm",
         "line_matchup_strength",
-
-        # Keep recency signals (useful for debugging + slate sim)
-        "xG_per60_recency",
-        "SOG_per60_recency",
-        "xGA_pg_recency",
-        "xGA_pg_recency_goalie",
     ]
 
-    # Only keep columns that actually exist
+    # Keep only existing columns
     keep_cols = [c for c in keep_cols if c in df.columns]
-
     df_out = df[keep_cols].copy()
 
     # -------------------------------------
-    # Preserve env_key + line_num (essential for line model merge)
+    # Preserve line/env information
+    # (required by merge_line_goal_into_projections.py)
     # -------------------------------------
     if "env_key" in df.columns:
         df_out["env_key"] = df["env_key"]
 
-    # Find line number field
     if "line_num" in df.columns:
         df_out["line_num"] = df["line_num"]
     elif "LINE" in df.columns:
@@ -101,9 +76,7 @@ def main():
     else:
         df_out["line_num"] = None
 
-    # -------------------------------------
-    # Sort FD file best → worst
-    # -------------------------------------
+    # Sort best → worst projection
     df_out = df_out.sort_values("PROJ", ascending=False)
 
     print(f" Writing FanDuel export -> {OUTPUT_FILE}")

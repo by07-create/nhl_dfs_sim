@@ -30,7 +30,7 @@ import pandas as pd
 # ---------------------------------------------------------------------
 # Project paths
 # ---------------------------------------------------------------------
-PROJECT_DIR = Path(r"C:\Users\b-yan\OneDrive\Documents\Bo - Python Apps\NHL Simulator")
+PROJECT_DIR = Path(__file__).parent.resolve()
 
 INPUT_FILE = PROJECT_DIR / "nhl_player_projections.csv"
 OUTPUT_FILE = PROJECT_DIR / "nhl_line_boom_model.csv"

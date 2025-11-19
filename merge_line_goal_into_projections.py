@@ -11,11 +11,13 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-# CLOUD-SAFE ROOT
-APP_ROOT = Path(__file__).parent.resolve()
-PROJ_FILE = APP_ROOT / "nhl_fd_projections.csv"
-LINE_FILE = APP_ROOT / "line_goal_model.csv"
-OUT_FILE = PROJ_FILE  # overwrite in place
+# ------------------------------------------------
+# CLOUD-SAFE PROJECT ROOT (patched)
+# ------------------------------------------------
+APP_ROOT   = Path(__file__).parent.resolve()
+PROJ_FILE  = APP_ROOT / "nhl_fd_projections.csv"
+LINE_FILE  = APP_ROOT / "line_goal_model.csv"
+OUT_FILE   = PROJ_FILE   # same behavior: overwrite input
 
 
 def build_team_line_keys_for_fd(df: pd.DataFrame) -> pd.DataFrame:
@@ -25,7 +27,7 @@ def build_team_line_keys_for_fd(df: pd.DataFrame) -> pd.DataFrame:
 
     df["TEAM_KEY"] = df["TEAM"].astype(str).str.upper().str.strip()
 
-    # Figure out which column represents the even-strength line number
+    # Determine which column represents the EV line number
     line_col = None
     for cand in ["LINE", "line_num", "Line", "line"]:
         if cand in df.columns:
@@ -34,6 +36,7 @@ def build_team_line_keys_for_fd(df: pd.DataFrame) -> pd.DataFrame:
 
     if line_col is not None:
         line_numeric = pd.to_numeric(df[line_col], errors="coerce")
+        line_numeric_clean = line_numeric.dropna()
 
         df["LINE_KEY"] = None
         df.loc[line_numeric.notna(), "LINE_KEY"] = (
@@ -41,21 +44,20 @@ def build_team_line_keys_for_fd(df: pd.DataFrame) -> pd.DataFrame:
         )
 
     elif "env_key" in df.columns:
-        # Fallback: derive from env_key like COL_L1 -> L1
+        # Fallback: extract like "COL_L1" -> "L1"
         tmp = df["env_key"].astype(str).str.extract(r"_(L\d+)", expand=False)
         df["LINE_KEY"] = tmp.str.upper()
     else:
-        # No line info at all - you'll just get zeros from the merge
         df["LINE_KEY"] = pd.NA
 
-    # -------------------------------------
-    # If LINE_KEY still missing, derive from env_key another way
-    # -------------------------------------
+    # ---------------------------
+    # PATCH: If still missing, derive from env_key another way
+    # ---------------------------
     if df["LINE_KEY"].isna().all() and "env_key" in df.columns:
         tmp2 = df["env_key"].astype(str).str.extract(r"_L(\d+)", expand=False)
         df["LINE_KEY"] = tmp2.apply(lambda x: f"L{x}" if pd.notna(x) else None)
 
-    # Explicitly ensure goalies do NOT get a line key
+    # Goalies must not get a line key
     pos_col = None
     for cand in ["POS", "Position", "base_pos"]:
         if cand in df.columns:
@@ -100,12 +102,15 @@ def main():
     print(f" Loading line goal model -> {LINE_FILE}")
     lm = pd.read_csv(LINE_FILE)
 
-    # Prepare keys on both sides
+    # Build keys
     df = build_team_line_keys_for_fd(df)
     lm = build_team_line_keys_for_line_model(lm)
 
-    # We only need the key + goal fields from the line model
-    cols_needed = [c for c in ["TEAM_KEY", "LINE_KEY", "p_goal_line", "lambda_total"] if c in lm.columns]
+    # Only keep relevant columns from line model
+    cols_needed = [
+        c for c in ["TEAM_KEY", "LINE_KEY", "p_goal_line", "lambda_total"]
+        if c in lm.columns
+    ]
     lm_small = lm[cols_needed].copy()
 
     print(" Merging line goal model into FD projections...")
@@ -116,11 +121,19 @@ def main():
         suffixes=("", "_line"),
     )
 
-    # Clean numeric fields; goalies / unmatched rows -> 0
-    merged["p_goal_line"] = pd.to_numeric(merged.get("p_goal_line"), errors="coerce").fillna(0.0).clip(0.0, 1.0)
-    merged["lambda_total"] = pd.to_numeric(merged.get("lambda_total"), errors="coerce").fillna(0.0)
+    # Clean numeric fields
+    merged["p_goal_line"] = (
+        pd.to_numeric(merged.get("p_goal_line"), errors="coerce")
+        .fillna(0.0)
+        .clip(0.0, 1.0)
+    )
 
-    # Drop helper keys from the export
+    merged["lambda_total"] = (
+        pd.to_numeric(merged.get("lambda_total"), errors="coerce")
+        .fillna(0.0)
+    )
+
+    # Remove helper keys from final export
     merged.drop(columns=["TEAM_KEY", "LINE_KEY"], inplace=True, errors="ignore")
 
     print(f" Writing merged FD projections -> {OUT_FILE}")
