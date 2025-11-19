@@ -84,12 +84,11 @@ fig = make_subplots(
 
 # ----------------------------------------------------------
 # Row 1 — fwd_score vs line_score
-#   - Best spots → upper-right (strong forwards, strong total line)
 # ----------------------------------------------------------
 fig.add_trace(
     go.Scatter(
-        x=df["fwd_score"],
-        y=df["line_score"],
+        x=df["line_score"],
+        y=df["fwd_score"],
         mode="markers",
         marker=dict(
             size=size_scaled,
@@ -101,8 +100,8 @@ fig.add_trace(
         text=env_text,
         hovertemplate=(
             "TEAM/Line: %{text}<br>"
-            "Fwd Score: %{x:.2f}<br>"
-            "Line Score: %{y:.2f}<br>"
+            "Fwd Score: %{y:.2f}<br>"
+            "Line Score: %{x:.2f}<br>"
             "Salary Total: %{customdata[0]:.0f}<extra></extra>"
         ),
         customdata=df[["line_salary_total"]].values if "line_salary_total" in df.columns else None,
@@ -112,8 +111,8 @@ fig.add_trace(
     col=1,
 )
 
-fig.update_xaxes(title_text="Forward Stack Score (fwd_score)", row=1, col=1)
-fig.update_yaxes(title_text="Overall Line Score (line_score)", row=1, col=1)
+fig.update_xaxes(title_text="Overall Line Score (line_score)", row=1, col=1)
+fig.update_yaxes(title_text="Forward Stack Score (fwd_score)", row=1, col=1)
 
 fig.add_annotation(
     row=1,
@@ -131,24 +130,28 @@ fig.add_annotation(
 )
 
 # ----------------------------------------------------------
-# Row 2 — line_salary_total vs best_def_score
-#   - Best value → upper-left (high D score, low salary)
-#   - Expensive studs → upper-right
+# Row 2 — DEFENSIVE PAIRINGS ONLY (P1, P2, P3...)
 # ----------------------------------------------------------
+# Filter defensive pairings
+df_def = df[df["line_role"].astype(str).str.startswith("P")].copy()
+
+if df_def.empty:
+    print("⚠ Warning: No defensive pairings found for Row 2 chart.")
+
 fig.add_trace(
     go.Scatter(
-        x=df["line_salary_total"],
-        y=df["best_def_score"],
+        x=df_def["line_salary_total"],
+        y=df_def["best_def_score"],
         mode="markers",
         marker=dict(
             size=10,
-            color=team_color(df["TEAM"]),
+            color=team_color(df_def["TEAM"]),
             opacity=0.85,
             line=dict(width=0.5, color="black"),
         ),
-        text=env_text,
+        text=df_def["TEAM"].astype(str) + " " + df_def["env_key"].astype(str),
         hovertemplate=(
-            "TEAM/Line: %{text}<br>"
+            "TEAM/Pair: %{text}<br>"
             "Total Salary: %{x:.0f}<br>"
             "Best Def Score: %{y:.2f}<extra></extra>"
         ),
@@ -178,14 +181,11 @@ fig.add_annotation(
 
 # ----------------------------------------------------------
 # Row 3 — best_def_score vs fwd_score
-#   - Best combined stacks → upper-right
-#   - Fwd-heavy / D-light → upper-left
-#   - D-heavy / Fwd-light → lower-right (contrarian)
 # ----------------------------------------------------------
 fig.add_trace(
     go.Scatter(
-        x=df["best_def_score"],
-        y=df["fwd_score"],
+        x=df["fwd_score"],
+        y=df["best_def_score"],
         mode="markers",
         marker=dict(
             size=10,
@@ -196,8 +196,8 @@ fig.add_trace(
         text=env_text,
         hovertemplate=(
             "TEAM/Line: %{text}<br>"
-            "Best Def Score: %{x:.2f}<br>"
-            "Fwd Score: %{y:.2f}<extra></extra>"
+            "Best Def Score: %{y:.2f}<br>"
+            "Fwd Score: %{x:.2f}<extra></extra>"
         ),
         name="Best D vs Fwd Score",
     ),
@@ -205,8 +205,8 @@ fig.add_trace(
     col=1,
 )
 
-fig.update_xaxes(title_text="Best Defense Stack Score (best_def_score)", row=3, col=1)
-fig.update_yaxes(title_text="Forward Stack Score (fwd_score)", row=3, col=1)
+fig.update_xaxes(title_text="Forward Stack Score (fwd_score)", row=3, col=1)
+fig.update_yaxes(title_text="Best Defense Stack Score (best_def_score)", row=3, col=1)
 
 fig.add_annotation(
     row=3,
@@ -234,31 +234,25 @@ fig.update_layout(
     margin=dict(l=60, r=30, t=80, b=50),
 )
 
-# Add a global legend/key as a top annotation
+# Add global key
 fig.add_annotation(
     x=0,
     y=1.08,
     xref="paper",
     yref="paper",
     text=(
-        "Legend/Key: Points are team lines. Colors = teams. "
-        "Row 1: favor upper-right (elite lines with elite forwards). "
-        "Row 2: favor upper-left for value D stacks. "
-        "Row 3: favor upper-right for balanced F+D stacks."
+        "Legend/Key: Points = team lines; colors = teams. "
+        "Row 1: elite lines → upper-right. "
+        "Row 2: value D stacks → upper-left. "
+        "Row 3: balanced F+D stacks → upper-right."
     ),
     showarrow=False,
     font=dict(size=11),
 )
 
 # ----------------------------------------------------------
-# Show combined interactive figure (for local debugging)
+# Output HTML
 # ----------------------------------------------------------
-print(" Showing combined interactive figure (all 3 charts stacked)")
-fig.show()
-
-# ----------------------------------------------------------
-# Write HTML report
-# ----------------------------------------------------------
-print(f" Writing HTML report -> {OUTPUT_HTML}")
+print(" Writing HTML report ->", OUTPUT_HTML)
 fig.write_html(OUTPUT_HTML, include_plotlyjs="cdn")
 print(" Done.")
