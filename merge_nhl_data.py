@@ -701,30 +701,27 @@ def build_merged_player_pool() -> pd.DataFrame:
         df["PP_TOI"] = np.nan
     
     # -----------------------------------------------------
-    # FIX POSITIONS BASED ON REAL MONEYPUCK GOALIE STATS
+    # FIX POSITIONS BASED ON MONEYPUCK GOALIE STATS
     # -----------------------------------------------------
-    mp_goalie_cols = [
+    goalie_cols = [
         "xGoals",
         "goals",
-        "shotsOnGoal",
-        "games_played",
-        "xGoals_goalie",
-        "goals_goalie",
-        "shotsOnGoal_goalie",
         "games_played_goalie",
+        "goalie_xGoals",
         "xGoals_L10",
         "xGoals_L20",
     ]
     
-    for col in mp_goalie_cols:
+    for col in goalie_cols:
         if col in df.columns:
             df.loc[
-                pd.to_numeric(df[col], errors="coerce").fillna(0) > 0,
+                df[col].notna()
+                & (pd.to_numeric(df[col], errors="coerce") > 0),
                 "base_pos"
             ] = "G"
     
-    df["is_goalie"] = df["base_pos"].astype(str).eq("G")
-
+    # Refresh flag
+    df["is_goalie"] = df["base_pos"].astype(str).str.upper().eq("G")
     print(" Adding derived per-60 rates and multipliers...")
     df = add_rates_and_roles(df)
 
