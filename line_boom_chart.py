@@ -18,7 +18,7 @@ from pathlib import Path
 # ------------------------------------------
 PROJECT_DIR = Path(__file__).parent.resolve()
 INPUT_FILE = PROJECT_DIR / "nhl_line_boom_model.csv"
-OUTPUT_FILE = PROJECT_DIR / "nhl_line_boom_dashboard.html"
+OUTPUT_FILE = PROJECT_DIR / "nhl_line_boom_chart.html"
 
 print("Chart script started")
 print(f"Loading CSV: {INPUT_FILE}")
