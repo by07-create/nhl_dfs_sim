@@ -136,7 +136,7 @@ def compute_goalie_fpts(df: pd.DataFrame) -> pd.Series:
     shutout_pct = np.clip(0.12 - 0.02 * (exp_ga - 2.0), 0.01, 0.15)
 
     fpts = (
-        exp_saves * FD_SOG
+        exp_saves * 0.8
         - exp_ga * 4.0
         + win_pct * FD_WIN
         + shutout_pct * FD_SHUTOUT
