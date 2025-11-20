@@ -13,7 +13,7 @@ APP_ROOT = Path(__file__).parent.resolve()
 
 # Streamlit uploader will save RW here
 DATA_DIR = APP_ROOT
-
+#
 RW_FILE      = DATA_DIR / "rw-nhl-player-pool.xlsx"
 PP_FILE      = DATA_DIR / "nhl-stats-power-play.xlsx"     # optional
 OUTPUT_FILE  = APP_ROOT / "merged_nhl_player_pool.csv"
@@ -624,8 +624,11 @@ def build_merged_player_pool() -> pd.DataFrame:
         for col in df_lines.columns:
             if col in {"xGoalsFor", "xGoalsAgainst", "shotsOnGoalFor", "shotsOnGoalAgainst"}:
                 rename_map[col] = col + "_lineenv"
+    
         df_lines2 = df_lines.rename(columns=rename_map)
-        (
+    
+        # >>> THIS WAS MISSING <<<
+        df = df.merge(
             df_lines2,
             how="left",
             on="env_key",
