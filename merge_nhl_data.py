@@ -625,7 +625,7 @@ def build_merged_player_pool() -> pd.DataFrame:
             if col in {"xGoalsFor", "xGoalsAgainst", "shotsOnGoalFor", "shotsOnGoalAgainst"}:
                 rename_map[col] = col + "_lineenv"
         df_lines2 = df_lines.rename(columns=rename_map)
-        df = df.merge(
+        (
             df_lines2,
             how="left",
             on="env_key",
@@ -686,7 +686,10 @@ def build_merged_player_pool() -> pd.DataFrame:
         suffixes=("", "_goalie"),
     )
     df.drop(columns=["team"], inplace=True, errors="ignore")
-
+    
+    # -----------------------------
+    # PP merge
+    # -----------------------------
     if df_pp is not None:
         print(" Merging PP usage (PP_TOI)...")
         df = df.merge(
@@ -696,6 +699,27 @@ def build_merged_player_pool() -> pd.DataFrame:
         )
     else:
         df["PP_TOI"] = np.nan
+    
+    # -----------------------------------------------------
+    # FIX POSITIONS BASED ON MONEYPUCK GOALIE STATS
+    # -----------------------------------------------------
+    goalie_cols = [
+        "xGoals",                 # season xGoals
+        "goals",                  # actual GA
+        "games_played_goalie",    # MoneyPuck GP
+        "goalie_xGoals",          # some MP versions
+        "xGoals_L10", "xGoals_L20"
+    ]
+    
+    for col in goalie_cols:
+        if col in df.columns:
+            df.loc[
+                df[col].notna() & (pd.to_numeric(df[col], errors="coerce") > 0),
+                "base_pos"
+            ] = "G"
+    
+    # Refresh goalie flag
+    df["is_goalie"] = df["base_pos"].astype(str).str.upper().eq("G")
 
     print(" Adding derived per-60 rates and multipliers...")
     df = add_rates_and_roles(df)
