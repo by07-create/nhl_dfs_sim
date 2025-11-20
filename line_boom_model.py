@@ -101,7 +101,7 @@ def load_rw_vegas_totals() -> Dict[str, float]:
     Load Vegas O/U directly from Rotowire NHL player pool file in Downloads.
     On cloud, this will usually just log "not found" and return {}.
     """
-    rw_path = Path.home() / "Downloads" / "rw-nhl-player-pool.xlsx"
+    rw_path = PROJECT_DIR / "rw-nhl-player-pool.xlsx"
     if not rw_path.exists():
         print(f"RW file not found: {rw_path}")
         return {}
