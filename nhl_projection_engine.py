@@ -78,8 +78,16 @@ def moneypuck_fpts_row(row):
 # ----- Goalie model helpers -----
 def compute_goalie_fpts(df: pd.DataFrame) -> pd.Series:
     d = df.copy()
-    xga_team = pd.to_numeric(d.get("xGA_pg_recency", d.get("xGoalsAgainst_teamenv", np.nan)), errors="coerce")
-    sog_team = pd.to_numeric(d.get("shotsOnGoalAgainst_teamenv", d.get("shotsAgainst_teamenv", np.nan)), errors="coerce")
+
+    # Team-level environment (xGA and SOG allowed)
+    xga_team = pd.to_numeric(
+        d.get("xGA_pg_recency", d.get("xGoalsAgainst_teamenv", np.nan)),
+        errors="coerce",
+    )
+    sog_team = pd.to_numeric(
+        d.get("shotsOnGoalAgainst_teamenv", d.get("shotsAgainst_teamenv", np.nan)),
+        errors="coerce",
+    )
 
     if isinstance(xga_team, pd.Series):
         league_xga = xga_team.replace(0, np.nan).mean()
@@ -91,6 +99,7 @@ def compute_goalie_fpts(df: pd.DataFrame) -> pd.Series:
     else:
         league_sog = np.nan
 
+    # Reasonable league baselines if data is garbage
     if not np.isfinite(league_xga) or league_xga <= 0:
         league_xga = 2.8
     if not np.isfinite(league_sog) or league_sog <= 0:
@@ -104,37 +113,67 @@ def compute_goalie_fpts(df: pd.DataFrame) -> pd.Series:
     xga_team = xga_team.fillna(league_xga)
     sog_team = sog_team.fillna(league_sog)
 
-    g_xg = pd.to_numeric(d.get("goalie_xGoals", np.nan), errors="coerce")
-    g_sog = pd.to_numeric(d.get("goalie_shotsOnGoal", np.nan), errors="coerce")
+    # Goalie-level stats (prefer these; fall back to league env safely)
+    g_xg    = pd.to_numeric(d.get("goalie_xGoals", np.nan), errors="coerce")
+    g_sog   = pd.to_numeric(d.get("goalie_shotsOnGoal", np.nan), errors="coerce")
     g_goals = pd.to_numeric(d.get("goalie_goals", np.nan), errors="coerce")
     g_games = pd.to_numeric(d.get("goalie_games_played", np.nan), errors="coerce")
 
+    # Expected goals against per game (season + recency blend)
     g_xg_pg_season = np.where((g_xg > 0) & (g_games > 0), g_xg / g_games, np.nan)
-    g_xg_pg_rec = pd.to_numeric(d.get("xGA_pg_recency_goalie", np.nan), errors="coerce")
+    g_xg_pg_rec    = pd.to_numeric(
+        d.get("xGA_pg_recency_goalie", np.nan),
+        errors="coerce",
+    )
 
     g_xg_per_game = np.where(
         np.isfinite(g_xg_pg_rec),
         0.70 * g_xg_pg_rec + 0.30 * np.where(np.isfinite(g_xg_pg_season), g_xg_pg_season, xga_team),
-        np.where(np.isfinite(g_xg_pg_season), g_xg_pg_season, xga_team)
+        np.where(np.isfinite(g_xg_pg_season), g_xg_pg_season, xga_team),
     )
 
-    g_sog_per_game = np.where((g_sog > 0) & (g_games > 0), g_sog / g_games, sog_team)
+    # Shots faced per game: if we don't have goalie-level, use league avg, not team SOG
+    g_sog_per_game = np.where(
+        (g_sog > 0) & (g_games > 0),
+        g_sog / g_games,
+        league_sog,
+    )
 
-    save_pct = np.where(g_sog_per_game > 0, 1.0 - (g_xg_per_game / g_sog_per_game), 0.910)
+    # Save percentage with sane clamp
+    with np.errstate(divide="ignore", invalid="ignore"):
+        save_pct = np.where(
+            g_sog_per_game > 0,
+            1.0 - (g_xg_per_game / g_sog_per_game),
+            0.910,
+        )
     save_pct = np.clip(save_pct, 0.880, 0.940)
 
+    # Expected GA and saves
     exp_ga = g_xg_per_game
     exp_saves = g_sog_per_game * save_pct
 
-    win_pct = pd.to_numeric(d.get("Win %", np.nan), errors="coerce")
-    if not np.isfinite(win_pct).any():
-        win_pct = 0.5
+    # Win% handling — keep as a Series, not a scalar
+    win_raw = pd.to_numeric(d.get("Win %", np.nan), errors="coerce")
+    if isinstance(win_raw, pd.Series) and win_raw.max(skipna=True) > 1.0:
+        win_raw = win_raw / 100.0
+
+    # Clamp to reasonable range and fill missing with ~0.45
+    if isinstance(win_raw, pd.Series):
+        win_pct = win_raw.clip(0.25, 0.75).fillna(0.45)
     else:
-        if win_pct.max() > 1.0:
-            win_pct = win_pct / 100.0
+        win_pct = pd.Series(0.45, index=d.index)
 
-    shutout_pct = np.clip(0.12 - 0.02 * (exp_ga - 2.0), 0.01, 0.15)
+    # Shutout% – much more conservative (1–8% range)
+    # Base around league average (≈4–5%) and tilt by exp_ga
+    with np.errstate(invalid="ignore"):
+        shutout_pct = 0.045 - 0.015 * (exp_ga - 2.4)
+    shutout_pct = np.clip(shutout_pct, 0.01, 0.08)
 
+    # FanDuel-style goalie scoring:
+    #   +0.8 per save
+    #   -4 per GA
+    #   +12 for win
+    #   +8 for shutout bonus
     fpts = (
         exp_saves * 0.8
         - exp_ga * 4.0
@@ -142,7 +181,11 @@ def compute_goalie_fpts(df: pd.DataFrame) -> pd.Series:
         + shutout_pct * FD_SHUTOUT
     )
 
+    # Last line of defense: clamp projections to a sane DFS range
+    fpts = np.clip(fpts, -5.0, 40.0)
+
     return pd.Series(fpts, index=d.index)
+
 
 
 # ----- Props attach helper -----
