@@ -149,6 +149,53 @@ fig4.update_layout(
     yaxis_title="Line Score"
 )
 
+# ===========================================================
+# Summary Tables (Top FWD, Top DEF, Top STACKS)
+# ===========================================================
+def build_summary_table(df, cols, title):
+    out = df[cols].copy()
+    out = out.to_html(index=False, justify="center", float_format="%.2f")
+    return f"<h3>{title}</h3>" + out + "<br>"
+
+summary_html = "<h2>Top Lines & Stacks Summary</h2>"
+
+# --- Top 10 Forward Lines ---
+df_top_fwd = (
+    df[df["line_role"].str.startswith("L", na=False)]
+    .sort_values("fwd_score", ascending=False)
+    .head(10)
+)
+summary_html += build_summary_table(
+    df_top_fwd,
+    ["TEAM", "env_key", "fwd_score", "line_score", "matchup_mult_mean", "goalie_mult"],
+    "Top 10 Forward Lines"
+)
+
+# --- Top 10 Defense Pairings ---
+df_top_def = (
+    df[df["line_role"].str.startswith("P", na=False)]
+    .sort_values("fld_score", ascending=False)
+    .head(10)
+)
+summary_html += build_summary_table(
+    df_top_def,
+    ["TEAM", "env_key", "fld_score", "line_salary_total", "matchup_mult_mean"],
+    "Top 10 Defense Pairings"
+)
+
+# --- Top 10 Full Stacks (F + D) ---
+df_top_stack = (
+    df[df["line_role"].str.startswith("L", na=False)]
+    .sort_values("best_stack_score", ascending=False)
+    .head(10)
+)
+summary_html += build_summary_table(
+    df_top_stack,
+    ["TEAM", "env_key", "best_stack_score", "fwd_score", "best_def_for_line", "best_def_score"],
+    "Top 10 Forward + Defense Stacks"
+)
+
+
 # -----------------------
 # Build One-Page HTML Output
 # -----------------------
@@ -157,6 +204,9 @@ print(f"Saving dashboard to: {OUTPUT_FILE}")
 with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
     f.write("<html><body>")
     f.write(legend_text)
+    f.write("<hr>")
+    f.write(summary_html)
+    f.write("<hr>")
     f.write(fig1.to_html(full_html=False, include_plotlyjs='cdn'))
     f.write("<hr>")
     f.write(fig2.to_html(full_html=False, include_plotlyjs=False))
